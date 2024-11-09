@@ -57,7 +57,7 @@ Task("Test")
     var settings = new DotNetCoreTestSettings
      {
          Configuration = configuration,
-         Logger = $"trx;LogFileName=\"{testresultsfile}\"",  // by default results in Mbc.Log4Tc.Output.NLog.Test\TestResults\testresults.trx
+         Logger = $"trx;LogFileName=\"{testresultsfile}\"",  // by default results in Log4Tc.Output.NLog.Test\TestResults\testresults.trx
          // ArgumentCustomization = args=>args.Append("--collect:\"XPlat Code Coverage\""),        // code coverage output for package coverlet.collector
      };
 
@@ -76,7 +76,7 @@ Task("SmokeTest")
     var settings = new DotNetCoreTestSettings
      {
          Configuration = configuration,
-         Logger = $"trx;LogFileName=\"{testresultsfile}\"",  // by default results in Mbc.Log4Tc.Output.NLog.Test\TestResults\testresults.trx
+         Logger = $"trx;LogFileName=\"{testresultsfile}\"",  // by default results in Log4Tc.Output.NLog.Test\TestResults\testresults.trx
          // ArgumentCustomization = args=>args.Append("--collect:\"XPlat Code Coverage\""),        // code coverage output for package coverlet.collector
      };
 
@@ -94,7 +94,7 @@ Task("Publish")
     .Does(() =>
 {
     Information($"Publish service for windows runtime");
-    DotNetCorePublish("Mbc.Log4Tc.Service/Mbc.Log4Tc.Service.csproj", new DotNetCorePublishSettings()
+    DotNetCorePublish("Log4Tc.Service/Log4Tc.Service.csproj", new DotNetCorePublishSettings()
     {
         Configuration = configuration,
     });

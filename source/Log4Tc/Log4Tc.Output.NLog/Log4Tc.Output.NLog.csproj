@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NLog" Version="4.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Log4Tc.Output\Log4Tc.Output.csproj" />
+  </ItemGroup>
+
+  <ProjectExtensions><VisualStudio><UserProperties _1_1_4stylecop_1json__JsonSchema="" /></VisualStudio></ProjectExtensions>
+
+</Project>
