@@ -6,7 +6,7 @@
        ############################ -->
   <PropertyGroup>
     <Title>Log4Tc</Title>
-    <Product>mbc Log4Tc</Product>
+    <Product>Log4Tc</Product>
     <Description>Logging ADS Master für Beckhoff TwinCat 3 mit mehreren Ausgabe Plugins</Description>
     <Authors>stgm, joge, mihe</Authors>
     <Company>mbc Engineering GmbH</Company>
@@ -41,7 +41,7 @@
   <PropertyGroup>
     <!-- Not need if Roslyn analysis is used (https://github.com/DotNetAnalyzers/StyleCopAnalyzers/issues/2122)
     <RunCodeAnalysis>true</RunCodeAnalysis> -->
-    <CodeAnalysisRuleSet>$(SolutionDir)\Mbc.CodeAnalysis.ruleset</CodeAnalysisRuleSet>
+    <CodeAnalysisRuleSet>$(SolutionDir)\CodeAnalysis.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
     <!-- https://github.com/DotNetAnalyzers/StyleCopAnalyzers/blob/master/documentation/Configuration.md -->
