@@ -3,14 +3,17 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
+using System.Threading;
 using TwinCAT.Ads;
 using TwinCAT.Ads.Server;
 
 using LogLevel = Mbc.Log4Tc.Model.LogLevel;
+using System.IO;
 
 namespace Mbc.Log4Tc.Receiver
 {
-    public class AdsLogReceiver : TcAdsServer, ILogReceiver
+    public class AdsLogReceiver : AdsServer, ILogReceiver
     {
         private readonly ILogger<AdsLogReceiver> _logger;
         private readonly AdsHostnameService _adsHostnameService;
@@ -24,15 +27,13 @@ namespace Mbc.Log4Tc.Receiver
             _adsHostnameService = adsHostnameService;
         }
 
-        public override void AdsWriteInd(AmsAddress rAddr, uint invokeId, uint indexGroup, uint indexOffset, uint cbLength, byte[] data)
+        protected override Task<ResultWrite> OnWriteAsync(AmsAddress target, uint invokeId, uint indexGroup, uint indexOffset, ReadOnlyMemory<byte> writeData, CancellationToken cancel)
         {
-            // send response as soon as possible
-            AdsWriteRes(rAddr, invokeId, AdsErrorCode.NoError);
-
             try
             {
                 var entries = new List<LogEntry>();
-                var reader = new AdsBinaryReader(new AdsStream(data));
+                using var stream = new MemoryStream(writeData.ToArray());
+                using var reader = new BinaryReader(stream);
 
                 while (reader.BaseStream.Length > reader.BaseStream.Position)
                 {
@@ -48,8 +49,8 @@ namespace Mbc.Log4Tc.Receiver
                         throw new NotImplementedException($"Version {version}");
                     }
 
-                    logEntry.Source = rAddr.ToString();
-                    logEntry.Hostname = _adsHostnameService.GetHostname(rAddr.NetId).ValueOr(string.Empty);
+                    logEntry.Source = target.ToString();
+                    logEntry.Hostname = _adsHostnameService.GetHostname(target.NetId).ValueOr(string.Empty);
 
                     entries.Add(logEntry);
                 }
@@ -60,9 +61,10 @@ namespace Mbc.Log4Tc.Receiver
             {
                 _logger.LogError(e, "Error parsing log message from plc.");
             }
+            return Task.FromResult(new ResultWrite(AdsErrorCode.NoError));
         }
 
-        private LogEntry ReadLogEntryV1(AdsBinaryReader reader)
+        private LogEntry ReadLogEntryV1(BinaryReader reader)
         {
             var logEntry = new LogEntry
             {
@@ -108,7 +110,7 @@ namespace Mbc.Log4Tc.Receiver
             return logEntry;
         }
 
-        private DateTime ReadFiletime(AdsBinaryReader reader)
+        private DateTime ReadFiletime(BinaryReader reader)
         {
             var filetime = reader.ReadInt64();
             try
@@ -121,7 +123,7 @@ namespace Mbc.Log4Tc.Receiver
             }
         }
 
-        private object ReadObject(AdsBinaryReader reader)
+        private object ReadObject(BinaryReader reader)
         {
             var type = reader.ReadInt16();
             object value;
@@ -204,21 +206,21 @@ namespace Mbc.Log4Tc.Receiver
             return value;
         }
 
-        private string ReadString(AdsBinaryReader reader)
+        private string ReadString(BinaryReader reader)
         {
             var len = reader.ReadByte();
             var data = reader.ReadBytes(len);
             return Encoding.GetEncoding(1252).GetString(data);
         }
 
-        private string ReadWString(AdsBinaryReader reader)
+        private string ReadWString(BinaryReader reader)
         {
             var len = reader.ReadByte();
             var data = reader.ReadBytes(len * 2);
             return Encoding.Unicode.GetString(data);
         }
 
-        private LogLevel ReadLogLevel(AdsBinaryReader reader)
+        private LogLevel ReadLogLevel(BinaryReader reader)
         {
             var value = reader.ReadUInt16();
             return (LogLevel)Enum.ToObject(typeof(LogLevel), value);

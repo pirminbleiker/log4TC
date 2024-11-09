@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net461</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
+      <IsTestProject>true</IsTestProject>
 
-    <IsPackable>false</IsPackable>
+      <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

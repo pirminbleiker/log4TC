@@ -1,14 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Worker">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net461</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <Prefer32Bit>false</Prefer32Bit>
-    <RuntimeIdentifier>win</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <!-- Only supported for .net core app-->
     <PublishSingleFile>false</PublishSingleFile>
-
     <UserSecretsId>dotnet-Mbc.Log4Tc.Service-A8F619B6-166D-4E1E-9671-59E91544F2C0</UserSecretsId>
+    <Nullable>warnings</Nullable>
+    <OutputType>WinExe</OutputType>
+    <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
@@ -60,4 +61,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+
 </Project>

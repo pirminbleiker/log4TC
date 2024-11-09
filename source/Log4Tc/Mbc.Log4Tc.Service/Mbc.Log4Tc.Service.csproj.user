@@ -5,5 +5,9 @@
   </PropertyGroup>
   <PropertyGroup>
     <ActiveDebugProfile>Mbc.Log4Tc.Service-Development</ActiveDebugProfile>
+    <_LastSelectedProfileId>D:\Projects\log4TC\source\Log4Tc\Mbc.Log4Tc.Service\Properties\PublishProfiles\FolderProfile.pubxml</_LastSelectedProfileId>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DebuggerFlavor>ProjectDebugger</DebuggerFlavor>
   </PropertyGroup>
 </Project>

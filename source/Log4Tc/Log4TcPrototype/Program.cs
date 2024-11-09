@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using TwinCAT.Ads;
 using TwinCAT.Ads.Server;
 
@@ -11,7 +14,7 @@ namespace Log4TcPrototype
         public static void Main()
         {
             var server = new LogServer();
-            server.Connect();
+            server.ConnectServer();
 
             Console.WriteLine("Server is ready.");
             Console.ReadKey();
@@ -21,7 +24,7 @@ namespace Log4TcPrototype
     }
 
 #pragma warning disable SA1402 // File may only contain a single type
-    internal class LogServer : TcAdsServer
+    internal class LogServer : AdsServer
 #pragma warning restore SA1402 // File may only contain a single type
     {
         public LogServer()
@@ -29,21 +32,22 @@ namespace Log4TcPrototype
         {
         }
 
-        public override void AdsWriteInd(AmsAddress rAddr, uint invokeId, uint indexGroup, uint indexOffset, uint cbLength, byte[] data)
+        protected override Task<ResultWrite> OnWriteAsync(AmsAddress target, uint invokeId, uint indexGroup, uint indexOffset, ReadOnlyMemory<byte> writeData, CancellationToken cancel)
         {
-            Console.WriteLine($"Request from {rAddr}");
+            Console.WriteLine($"Request from {target}");
 
             try
             {
-                var buffer = new AdsBinaryReader(new AdsStream(data));
+                using var stream = new MemoryStream(writeData.ToArray());
+                using var reader = new BinaryReader(stream);
 
-                while (buffer.BaseStream.Length > buffer.BaseStream.Position)
+                while (reader.BaseStream.Length > reader.BaseStream.Position)
                 {
-                    var version = buffer.ReadByte();
+                    var version = reader.ReadByte();
                     byte[] buf = new byte[256];
                     byte ch;
                     int i = 0;
-                    while ((ch = buffer.ReadByte()) != 0)
+                    while ((ch = reader.ReadByte()) != 0)
                     {
                         buf[i++] = ch;
                     }
@@ -51,41 +55,41 @@ namespace Log4TcPrototype
                     var message = Encoding.Default.GetString(buf, 0, i);
 
                     i = 0;
-                    while ((ch = buffer.ReadByte()) != 0)
+                    while ((ch = reader.ReadByte()) != 0)
                     {
                         buf[i++] = ch;
                     }
 
                     var logger = Encoding.Default.GetString(buf, 0, i);
 
-                    var level = buffer.ReadUInt16();
-                    var timestampPlc = DateTime.FromFileTime(buffer.ReadInt64());
-                    var timestampClock = DateTime.FromFileTime(buffer.ReadInt64());
+                    var level = reader.ReadUInt16();
+                    var timestampPlc = DateTime.FromFileTime(reader.ReadInt64());
+                    var timestampClock = DateTime.FromFileTime(reader.ReadInt64());
 
                     var args = new List<(int, object)>();
                     var contex = new List<(string, object)>();
                     byte type;
-                    while ((type = buffer.ReadByte()) != 255)
+                    while ((type = reader.ReadByte()) != 255)
                     {
                         if (type == 1)
                         {
                             // Argument
-                            var argNo = buffer.ReadByte();
-                            var argType = buffer.ReadInt16();
+                            var argNo = reader.ReadByte();
+                            var argType = reader.ReadInt16();
                             object argValue = null;
                             switch (argType)
                             {
                                 case 4: // REAL
-                                    argValue = buffer.ReadSingle();
+                                    argValue = reader.ReadSingle();
                                     break;
 
                                 case 7: // INT
-                                    argValue = buffer.ReadInt16();
+                                    argValue = reader.ReadInt16();
                                     break;
 
                                 case 12: // STRING
                                     i = 0;
-                                    while ((ch = buffer.ReadByte()) != 0)
+                                    while ((ch = reader.ReadByte()) != 0)
                                     {
                                         buf[i++] = ch;
                                     }
@@ -99,14 +103,14 @@ namespace Log4TcPrototype
                         else if (type == 2)
                         {
                             i = 0;
-                            while ((ch = buffer.ReadByte()) != 0)
+                            while ((ch = reader.ReadByte()) != 0)
                             {
                                 buf[i++] = ch;
                             }
 
                             var name = Encoding.Default.GetString(buf, 0, i);
-                            var valueType = buffer.ReadInt16();
-                            var value = buffer.ReadInt16();
+                            var valueType = reader.ReadInt16();
+                            var value = reader.ReadInt16();
                             contex.Add((name, value));
                         }
                     }
@@ -114,12 +118,12 @@ namespace Log4TcPrototype
                     Console.WriteLine($"Log-Entry: version={version} message={message} logger={logger} level={level} timestamp={timestampPlc}.{timestampPlc.Millisecond} args=[{string.Join(",", args)}] context=[{string.Join(",", contex)}]");
                 }
 
-                AdsWriteRes(rAddr, invokeId, AdsErrorCode.NoError);
+                return Task.FromResult(new ResultWrite(AdsErrorCode.NoError));
             }
             catch (Exception e)
             {
                 Console.WriteLine($"Error {e}");
-                AdsWriteRes(rAddr, invokeId, AdsErrorCode.DeviceError);
+                return Task.FromResult(new ResultWrite(AdsErrorCode.DeviceError));
             }
         }
     }

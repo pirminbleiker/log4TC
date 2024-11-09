@@ -25,7 +25,6 @@ namespace Mbc.Log4Tc.Model.Message
             if (_token.OfType<MessageHoleToken>().All(x => x.Index.HasValue))
             {
                 PositionalArguments = _token.OfType<MessageHoleToken>().Select(x => x.Index).Values().ToList().Some<IEnumerable<int>>();
-
             }
             else
             {

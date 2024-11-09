@@ -43,7 +43,7 @@ namespace Mbc.Log4Tc.Receiver
             {
                 try
                 {
-                    _adsLogReceiver.Connect();
+                    _adsLogReceiver.ConnectServer();
                     _logger.LogInformation("Log receiver connected.");
                     return;
                 }
