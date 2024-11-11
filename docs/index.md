@@ -36,7 +36,10 @@ Bei Bedarf können wir auch kundenspezifische Ausgaben erstellen.
 
 ## Nächste Schritte
 
-* [Download, Lizenzierung und Dokumentation](https://www.mbc-engineering.ch/log4tc)
+* [Download](https://github.com/mbc-engineering/log4TC/releases/latest)
 * [Erste Schritte](gettingstarted/intro.md)
 * [Referenz](reference/index.md)
 
+## Firewall
+
+Der Log4TC Service erstellt einen eigenen ADS Server auf den die PLC sich verbindet. Der ADS Server läuft auf Port `16150`. Daher muss die Firewall entsprechend konfiguriert werden damit dieser Port erreichbar ist.
