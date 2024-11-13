@@ -43,7 +43,7 @@ namespace Log4Tc.Receiver
             {
                 try
                 {
-                    _adsLogReceiver.ConnectServer();
+                    await _adsLogReceiver.ConnectServerAndWaitAsync(ct);
                     _logger.LogInformation("Log receiver connected.");
                     return;
                 }

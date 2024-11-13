@@ -25,6 +25,7 @@ namespace Log4Tc.Receiver
         {
             _logger = logger;
             _adsHostnameService = adsHostnameService;
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         }
 
         protected override Task<ResultWrite> OnWriteAsync(AmsAddress target, uint invokeId, uint indexGroup, uint indexOffset, ReadOnlyMemory<byte> writeData, CancellationToken cancel)
