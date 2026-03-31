@@ -7,12 +7,29 @@ use chrono::{DateTime, Utc};
 use log4tc_core::LogLevel;
 use std::collections::HashMap;
 
+// Security limits for protocol parsing
+/// Maximum length for individual strings (65 KB)
+const MAX_STRING_LENGTH: usize = 65_536;
+/// Maximum number of arguments allowed per message
+const MAX_ARGUMENTS: usize = 32;
+/// Maximum number of context variables allowed per message
+const MAX_CONTEXT_VARS: usize = 64;
+/// Maximum total message size (1 MB)
+const MAX_MESSAGE_SIZE: usize = 1_048_576;
+
 /// Parser for ADS binary protocol messages
 pub struct AdsParser;
 
 impl AdsParser {
     /// Parse a complete ADS log entry from bytes
     pub fn parse(data: &[u8]) -> Result<AdsLogEntry> {
+        // Security: Check total message size
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(AdsError::ParseError(
+                format!("Message size {} exceeds maximum {}", data.len(), MAX_MESSAGE_SIZE)
+            ));
+        }
+
         let mut reader = BytesReader::new(data);
         Self::parse_from_reader(&mut reader)
     }
@@ -59,12 +76,24 @@ impl AdsParser {
             }
 
             if type_id == 1 {
-                // Argument
+                // Argument - with security limit
+                if arguments.len() >= MAX_ARGUMENTS {
+                    return Err(AdsError::ParseError(
+                        format!("Too many arguments: {} exceeds maximum {}",
+                                arguments.len() + 1, MAX_ARGUMENTS)
+                    ));
+                }
                 let index = reader.read_u8()?;
                 let value = reader.read_value()?;
                 arguments.insert(index as usize, value);
             } else if type_id == 2 {
-                // Context
+                // Context - with security limit
+                if context.len() >= MAX_CONTEXT_VARS {
+                    return Err(AdsError::ParseError(
+                        format!("Too many context variables: {} exceeds maximum {}",
+                                context.len() + 1, MAX_CONTEXT_VARS)
+                    ));
+                }
                 let scope = reader.read_u8()?;
                 let name = reader.read_string()?;
                 let value = reader.read_value()?;
@@ -135,6 +164,13 @@ impl<'a> BytesReader<'a> {
         // String format: [Length: u16] + [Data: UTF-8 bytes]
         let len_bytes = self.read_bytes(2)?;
         let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
+
+        // Security: Enforce maximum string length
+        if len > MAX_STRING_LENGTH {
+            return Err(AdsError::ParseError(
+                format!("String length {} exceeds maximum {}", len, MAX_STRING_LENGTH)
+            ));
+        }
 
         let str_bytes = self.read_bytes(len)?;
 

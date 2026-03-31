@@ -4,6 +4,24 @@ use crate::error::*;
 use log4tc_core::LogRecord;
 use serde_json::json;
 use std::time::Duration;
+use regex::Regex;
+
+/// Helper function to expand environment variables in strings
+/// Supports ${VAR_NAME} syntax, e.g., "Bearer ${API_KEY}"
+fn expand_env_vars(template: &str) -> String {
+    // Pattern: ${VARIABLE_NAME}
+    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("regex should compile");
+
+    re.replace_all(template, |caps: &regex::Captures| {
+        let var_name = &caps[1];
+        std::env::var(var_name)
+            .unwrap_or_else(|_| {
+                tracing::warn!("Environment variable not found: {}", var_name);
+                format!("${{{}}}", var_name)
+            })
+    })
+    .to_string()
+}
 
 /// Configuration for OTEL export
 #[derive(Clone, Debug)]
@@ -18,7 +36,7 @@ pub struct ExportConfig {
     pub retry_delay_ms: u64,
     /// HTTP request timeout
     pub timeout_secs: u64,
-    /// Optional auth header (e.g., "Bearer token" or from OTEL_EXPORTER_OTLP_HEADERS)
+    /// Optional auth header with environment variable expansion (e.g., "Bearer ${OTEL_AUTH_TOKEN}")
     pub auth_header: Option<String>,
 }
 
@@ -93,6 +111,7 @@ impl OtelExporter {
     }
 
     /// Send payload to collector with exponential backoff retry
+    /// Only retries on transient errors (5xx), fails immediately on permanent errors (4xx)
     async fn send_with_retry(&self, payload: &str) -> Result<()> {
         let mut retry_count = 0;
         let mut delay_ms = self.config.retry_delay_ms;
@@ -104,6 +123,15 @@ impl OtelExporter {
                     return Ok(());
                 }
                 Err(e) => {
+                    // Check if error is retryable
+                    let is_retryable = Self::is_retryable_error(&e);
+
+                    // Fail fast on permanent errors (4xx, auth failures, etc)
+                    if !is_retryable {
+                        tracing::error!("Permanent export error, not retrying: {}", e);
+                        return Err(e);
+                    }
+
                     retry_count += 1;
 
                     if retry_count > self.config.max_retries {
@@ -116,7 +144,7 @@ impl OtelExporter {
                     }
 
                     tracing::warn!(
-                        "Export failed (attempt {}/{}), retrying in {}ms: {}",
+                        "Transient export error (attempt {}/{}), retrying in {}ms: {}",
                         retry_count,
                         self.config.max_retries + 1,
                         delay_ms,
@@ -132,6 +160,21 @@ impl OtelExporter {
         }
     }
 
+    /// Determine if an error is retryable (transient) or permanent
+    fn is_retryable_error(err: &OtelError) -> bool {
+        match err {
+            OtelError::ExportFailed(msg) => {
+                // Only retry on 5xx server errors (connection timeout, temporary unavailable)
+                // Fail fast on 4xx client errors (auth, bad request, etc)
+                !msg.contains("HTTP 4") // 4xx errors are permanent
+            }
+            OtelError::HttpError(_) => true, // Network errors are retryable
+            OtelError::ConfigError(_) => false, // Config errors are permanent
+            OtelError::SerializationError(_) => false, // Serialization errors are permanent
+            OtelError::ReceiverError(_) => false, // Receiver setup errors are permanent
+        }
+    }
+
     /// Send the actual HTTP request to the collector
     async fn send_payload(&self, payload: &str) -> Result<()> {
         let mut request = self
@@ -139,9 +182,10 @@ impl OtelExporter {
             .post(&self.config.endpoint)
             .header("Content-Type", "application/json");
 
-        // Add authentication header if configured
+        // Add authentication header if configured (with environment variable expansion)
         if let Some(auth) = &self.config.auth_header {
-            request = request.header("Authorization", auth);
+            let expanded_auth = expand_env_vars(auth);
+            request = request.header("Authorization", expanded_auth);
         }
 
         let response = request
