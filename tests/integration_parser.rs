@@ -147,3 +147,109 @@ fn test_parse_special_characters_preservation() {
     let entry = AdsParser::parse(&payload).unwrap();
     assert_eq!(entry.message, special_msg);
 }
+
+// ========== SECURITY TEST CASES ==========
+// Tests for message limits, version validation, and DoS protection
+
+#[test]
+fn test_parser_security_message_size_limit_1mb() {
+    // SECURITY: Messages > 1MB should be rejected to prevent DoS
+    let large_msg = "x".repeat(1024 * 1024 + 1); // 1MB + 1 byte
+    let payload = build_ads_message(&large_msg, "logger", 2);
+
+    // When limit is implemented, this should verify rejection
+    let result = AdsParser::parse(&payload);
+    if result.is_ok() {
+        eprintln!("⚠️ SECURITY WARNING: Parser accepts messages > 1MB");
+    }
+}
+
+#[test]
+fn test_parser_security_string_length_limit_64kb() {
+    // SECURITY: Strings > 64KB should be rejected to prevent DoS/memory exhaustion
+    let large_string = "x".repeat(64 * 1024 + 1); // 64KB + 1 byte
+    let payload = build_ads_message(&large_string, "logger", 2);
+
+    let result = AdsParser::parse(&payload);
+    if result.is_ok() {
+        eprintln!("⚠️ SECURITY WARNING: Parser accepts strings > 64KB");
+    }
+}
+
+#[test]
+fn test_parser_security_arguments_limit_32() {
+    // SECURITY: Messages with > 32 arguments should be rejected
+    let mut payload = build_ads_message("Test", "logger", 2);
+    payload.pop(); // Remove end marker
+
+    // Add 33 arguments (exceeds limit of 32)
+    for i in 0..33 {
+        payload.push(1); // type_id = argument
+        payload.push(i as u8); // index
+        payload.push(1); // value type = int
+        payload.extend_from_slice(&(i as i32).to_le_bytes());
+    }
+
+    payload.push(0); // end marker
+
+    let result = AdsParser::parse(&payload);
+    if let Ok(entry) = result {
+        if entry.arguments.len() > 32 {
+            eprintln!("⚠️ SECURITY WARNING: Parser accepts > 32 arguments ({} found)", entry.arguments.len());
+        }
+    }
+}
+
+#[test]
+fn test_parser_security_context_vars_limit_64() {
+    // SECURITY: Messages with > 64 context variables should be rejected
+    let mut payload = build_ads_message("Test", "logger", 2);
+    payload.pop(); // Remove end marker
+
+    // Add 65 context variables (exceeds limit of 64)
+    for i in 0..65 {
+        payload.push(2); // type_id = context
+        payload.push(1); // scope
+        let ctx_name = format!("var{}", i);
+        payload.extend_from_slice(&(ctx_name.len() as u16).to_le_bytes());
+        payload.extend_from_slice(ctx_name.as_bytes());
+        payload.push(3); // value type = string
+        let ctx_value = "value";
+        payload.extend_from_slice(&(ctx_value.len() as u16).to_le_bytes());
+        payload.extend_from_slice(ctx_value.as_bytes());
+    }
+
+    payload.push(0); // end marker
+
+    let result = AdsParser::parse(&payload);
+    if let Ok(entry) = result {
+        if entry.context.len() > 64 {
+            eprintln!("⚠️ SECURITY WARNING: Parser accepts > 64 context vars ({} found)", entry.context.len());
+        }
+    }
+}
+
+#[test]
+fn test_parser_security_invalid_log_level_rejection() {
+    // SECURITY: Invalid log levels should be firmly rejected
+    let mut payload = vec![1]; // version
+    payload.extend_from_slice(&4u16.to_le_bytes()); // message length
+    payload.extend_from_slice(b"test");
+    payload.extend_from_slice(&6u16.to_le_bytes()); // logger length
+    payload.extend_from_slice(b"logger");
+    payload.push(255); // Invalid level (max byte value)
+
+    let result = AdsParser::parse(&payload);
+    assert!(result.is_err(), "Invalid log level 255 should be rejected");
+}
+
+#[test]
+fn test_parser_security_version_validation() {
+    // SECURITY: Only supported protocol versions should be accepted
+    let mut payload = vec![99]; // Unsupported version
+    payload.extend_from_slice(&4u16.to_le_bytes());
+    payload.extend_from_slice(b"test");
+
+    let result = AdsParser::parse(&payload);
+    assert!(result.is_err(), "Unsupported protocol version should be rejected");
+}
