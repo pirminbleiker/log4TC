@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    command: ["/otelcontribcol", "--config=/etc/otel-collector-config.yml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Prometheus metrics
+      - "8889:8889"   # Prometheus exporter
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml
+    environment:
+      - LOG_LEVEL=info
+
+  # Log4TC Service
+  log4tc-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: log4tc-service
+    ports:
+      - "16150:16150"  # ADS listener
+      - "4318:4318"    # OTLP HTTP (forwarded from app)
+    environment:
+      - LOG4TC_CONFIG=/etc/log4tc/config.json
+      - RUST_LOG=log4tc_service=info
+    volumes:
+      - ./config.example.json:/etc/log4tc/config.json:ro
+    depends_on:
+      - otel-collector
+    command:
+      - "--config"
+      - "/etc/log4tc/config.json"
+      - "--ads-port"
+      - "16150"

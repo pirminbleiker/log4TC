@@ -14,16 +14,18 @@ use crate::dispatcher::LogDispatcher;
 pub struct Log4TcService {
     settings: AppSettings,
     log_dispatcher: LogDispatcher,
+    ads_port: u16,
 }
 
 impl Log4TcService {
     /// Create a new Log4TC service instance
-    pub async fn new(settings: AppSettings) -> Result<Self> {
+    pub async fn new(settings: AppSettings, ads_port: u16) -> Result<Self> {
         let dispatcher = LogDispatcher::new(&settings).await?;
 
         Ok(Self {
             settings,
             log_dispatcher: dispatcher,
+            ads_port,
         })
     }
 
@@ -40,7 +42,7 @@ impl Log4TcService {
         // Start ADS listener (legacy protocol support)
         let ads_listener = AdsListener::new(
             "127.0.0.1".to_string(),
-            16150, // Default ADS port
+            self.ads_port,
             log_tx.clone(),
         );
 

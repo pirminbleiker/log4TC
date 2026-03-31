@@ -28,10 +28,7 @@ hyper-util.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 uuid.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true }
-windows-service = "0.6"
+clap = { version = "4.4", features = ["derive"] }
 
 [dev-dependencies]
 mockall.workspace = true

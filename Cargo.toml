@@ -49,9 +49,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
 
-# Windows-specific
-windows = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Services"] }
-windows-service = "0.6"
+# CLI
+clap = { version = "4.4", features = ["derive"] }
 
 # Internal crates
 log4tc-core = { path = "crates/log4tc-core" }
