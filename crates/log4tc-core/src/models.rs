@@ -294,4 +294,278 @@ mod tests {
             Some(&serde_json::Value::String("TestProject".to_string()))
         );
     }
+
+    #[test]
+    fn test_log_level_as_u8() {
+        assert_eq!(LogLevel::Trace.as_u8(), 0);
+        assert_eq!(LogLevel::Debug.as_u8(), 1);
+        assert_eq!(LogLevel::Info.as_u8(), 2);
+        assert_eq!(LogLevel::Warn.as_u8(), 3);
+        assert_eq!(LogLevel::Error.as_u8(), 4);
+        assert_eq!(LogLevel::Fatal.as_u8(), 5);
+    }
+
+    #[test]
+    fn test_log_level_from_u8() {
+        assert_eq!(LogLevel::from_u8(0), Some(LogLevel::Trace));
+        assert_eq!(LogLevel::from_u8(1), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_u8(2), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_u8(3), Some(LogLevel::Warn));
+        assert_eq!(LogLevel::from_u8(4), Some(LogLevel::Error));
+        assert_eq!(LogLevel::from_u8(5), Some(LogLevel::Fatal));
+        assert_eq!(LogLevel::from_u8(255), None);
+        assert_eq!(LogLevel::from_u8(100), None);
+    }
+
+    #[test]
+    fn test_log_level_comparison() {
+        assert!(LogLevel::Trace < LogLevel::Debug);
+        assert!(LogLevel::Debug < LogLevel::Info);
+        assert!(LogLevel::Info < LogLevel::Warn);
+        assert!(LogLevel::Warn < LogLevel::Error);
+        assert!(LogLevel::Error < LogLevel::Fatal);
+        assert_eq!(LogLevel::Info, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_entry_with_metadata() {
+        let mut entry = LogEntry::new(
+            "192.168.1.1:851".to_string(),
+            "plc-hub".to_string(),
+            "Motor started".to_string(),
+            "motion.logger".to_string(),
+            LogLevel::Info,
+        );
+
+        entry.task_name = "MotorControl".to_string();
+        entry.task_index = 2;
+        entry.task_cycle_counter = 1000;
+        entry.app_name = "HydraulicSystem".to_string();
+        entry.project_name = "ProductionLine".to_string();
+        entry.online_change_count = 0;
+
+        assert_eq!(entry.task_name, "MotorControl");
+        assert_eq!(entry.task_index, 2);
+        assert_eq!(entry.task_cycle_counter, 1000);
+        assert_eq!(entry.app_name, "HydraulicSystem");
+        assert_eq!(entry.project_name, "ProductionLine");
+    }
+
+    #[test]
+    fn test_log_entry_with_arguments() {
+        let mut entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "Error code: {0}".to_string(),
+            "error.logger".to_string(),
+            LogLevel::Error,
+        );
+
+        entry.arguments.insert(0, serde_json::json!(1234));
+        entry.arguments.insert(1, serde_json::json!("timeout"));
+
+        assert_eq!(entry.arguments.len(), 2);
+        assert_eq!(entry.arguments[&0], serde_json::json!(1234));
+        assert_eq!(entry.arguments[&1], serde_json::json!("timeout"));
+    }
+
+    #[test]
+    fn test_log_entry_with_context() {
+        let mut entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg".to_string(),
+            "logger".to_string(),
+            LogLevel::Debug,
+        );
+
+        entry.context.insert("user_id".to_string(), serde_json::json!("user_123"));
+        entry.context.insert("session_id".to_string(), serde_json::json!("sess_456"));
+        entry.context.insert("request_count".to_string(), serde_json::json!(42));
+
+        assert_eq!(entry.context.len(), 3);
+        assert_eq!(entry.context["user_id"], serde_json::json!("user_123"));
+    }
+
+    #[test]
+    fn test_log_entry_unique_ids() {
+        let entry1 = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg1".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        let entry2 = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg2".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        assert_ne!(entry1.id, entry2.id);
+    }
+
+    #[test]
+    fn test_log_entry_timestamps() {
+        let entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        // Timestamps should be set to approximately now
+        let now = chrono::Utc::now();
+        let diff_plc = (now - entry.plc_timestamp).num_seconds().abs();
+        let diff_clock = (now - entry.clock_timestamp).num_seconds().abs();
+
+        assert!(diff_plc < 2);
+        assert!(diff_clock < 2);
+    }
+
+    #[test]
+    fn test_log_record_all_attributes() {
+        let mut entry = LogEntry::new(
+            "192.168.1.1".to_string(),
+            "plc".to_string(),
+            "Test".to_string(),
+            "app.module".to_string(),
+            LogLevel::Error,
+        );
+
+        entry.task_name = "Task1".to_string();
+        entry.task_index = 10;
+        entry.task_cycle_counter = 500;
+        entry.app_name = "App1".to_string();
+        entry.project_name = "Project1".to_string();
+        entry.online_change_count = 3;
+        entry.context.insert("key1".to_string(), serde_json::json!("value1"));
+        entry.arguments.insert(0, serde_json::json!(123));
+
+        let record = LogRecord::from_log_entry(entry);
+
+        // Check all attribute categories are present
+        assert_eq!(record.resource_attributes.len(), 5);
+        assert_eq!(record.scope_attributes.len(), 1);
+        assert!(record.log_attributes.len() >= 5); // context + 4 standard + args
+
+        assert_eq!(record.severity_number, 17); // Error = 17
+        assert_eq!(record.severity_text, "ERROR");
+    }
+
+    #[test]
+    fn test_log_record_empty_optional_fields() {
+        let entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        let record = LogRecord::from_log_entry(entry);
+
+        // Should still have standard attributes
+        assert!(record.resource_attributes.contains_key("service.name"));
+        assert!(record.resource_attributes.contains_key("host.name"));
+        assert!(record.log_attributes.contains_key("plc.timestamp"));
+        assert!(record.log_attributes.contains_key("task.cycle"));
+    }
+
+    #[test]
+    fn test_log_record_body_preservation() {
+        let messages = vec![
+            "Simple message",
+            "Message with numbers 123",
+            "Message with special chars: !@#$%",
+            "Message with\nmultiple\nlines",
+            "",
+        ];
+
+        for msg in messages {
+            let entry = LogEntry::new(
+                "src".to_string(),
+                "host".to_string(),
+                msg.to_string(),
+                "logger".to_string(),
+                LogLevel::Info,
+            );
+
+            let record = LogRecord::from_log_entry(entry);
+            assert_eq!(record.body, serde_json::Value::String(msg.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_log_record_resource_attributes_structure() {
+        let mut entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        entry.project_name = "MyProject".to_string();
+        entry.app_name = "MyApp".to_string();
+        entry.task_name = "MainTask".to_string();
+        entry.task_index = 5;
+
+        let record = LogRecord::from_log_entry(entry);
+
+        assert_eq!(
+            record.resource_attributes["service.name"],
+            serde_json::Value::String("MyProject".to_string())
+        );
+        assert_eq!(
+            record.resource_attributes["service.instance.id"],
+            serde_json::Value::String("MyApp".to_string())
+        );
+        assert_eq!(
+            record.resource_attributes["process.command_line"],
+            serde_json::Value::String("MainTask".to_string())
+        );
+        assert_eq!(
+            record.resource_attributes["process.pid"],
+            serde_json::Value::Number(5.into())
+        );
+    }
+
+    #[test]
+    fn test_log_level_otel_all_levels() {
+        let all_levels = [
+            (LogLevel::Trace, 1, "TRACE"),
+            (LogLevel::Debug, 5, "DEBUG"),
+            (LogLevel::Info, 9, "INFO"),
+            (LogLevel::Warn, 13, "WARN"),
+            (LogLevel::Error, 17, "ERROR"),
+            (LogLevel::Fatal, 21, "FATAL"),
+        ];
+
+        for (level, expected_num, expected_text) in all_levels {
+            assert_eq!(level.to_otel_severity_number(), expected_num);
+            assert_eq!(level.to_otel_severity_text(), expected_text);
+        }
+    }
+
+    #[test]
+    fn test_log_entry_clone() {
+        let mut entry = LogEntry::new(
+            "src".to_string(),
+            "host".to_string(),
+            "msg".to_string(),
+            "logger".to_string(),
+            LogLevel::Info,
+        );
+
+        entry.arguments.insert(0, serde_json::json!("arg1"));
+        let cloned = entry.clone();
+
+        assert_eq!(cloned.message, entry.message);
+        assert_eq!(cloned.arguments, entry.arguments);
+    }
 }
