@@ -53,6 +53,12 @@ tracing-appender = "0.2"
 windows = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Services"] }
 windows-service = "0.6"
 
+# Internal crates
+log4tc-core = { path = "crates/log4tc-core" }
+log4tc-ads = { path = "crates/log4tc-ads" }
+log4tc-otel = { path = "crates/log4tc-otel" }
+log4tc-service = { path = "crates/log4tc-service" }
+
 # Utilities
 anyhow = "1.0"
 thiserror = "1.0"
