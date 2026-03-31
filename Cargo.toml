@@ -1,0 +1,71 @@
+[workspace]
+members = [
+    "crates/log4tc-core",
+    "crates/log4tc-ads",
+    "crates/log4tc-otel",
+    "crates/log4tc-service",
+    "crates/log4tc-benches",
+    "crates/log4tc-integration-tests",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Log4TC Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mbc-engineering/log4tc"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# OpenTelemetry
+opentelemetry = { version = "0.20", features = ["trace"] }
+opentelemetry-proto = { version = "0.20", features = ["gen-tonic"] }
+tonic = "0.10"
+tonic-build = "0.10"
+prost = "0.12"
+prost-types = "0.12"
+
+# HTTP/Web
+axum = "0.7"
+hyper = "1.0"
+hyper-util = "0.1"
+http = "1.0"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors", "timeout"] }
+reqwest = { version = "0.11", features = ["json"] }
+
+# Logging/Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+
+# Windows-specific
+windows = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Services"] }
+windows-service = "0.6"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+bytes = "1.5"
+parking_lot = "0.12"
+
+# Testing
+mockall = "0.12"
+proptest = "1.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -1,0 +1,28 @@
+[package]
+name = "log4tc-integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Integration and end-to-end tests for Log4TC logging service"
+
+[dependencies]
+log4tc-core.workspace = true
+log4tc-ads.workspace = true
+log4tc-otel.workspace = true
+
+tokio = { workspace = true, features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+bytes.workspace = true
+
+# Testing utilities
+mockall.workspace = true
+
+# Async utilities for testing
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"
