@@ -1,8 +1,6 @@
 //! Performance benchmarking utilities and fixtures for Log4TC
 
-use chrono::{DateTime, Utc};
 use log4tc_core::{LogEntry, LogLevel};
-use std::collections::HashMap;
 
 /// Create test log entries with various complexity levels
 pub struct LogEntryFixtures;

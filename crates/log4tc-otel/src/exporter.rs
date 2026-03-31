@@ -169,9 +169,9 @@ impl OtelExporter {
                 !msg.contains("HTTP 4") // 4xx errors are permanent
             }
             OtelError::HttpError(_) => true, // Network errors are retryable
-            OtelError::ConfigError(_) => false, // Config errors are permanent
             OtelError::SerializationError(_) => false, // Serialization errors are permanent
             OtelError::ReceiverError(_) => false, // Receiver setup errors are permanent
+            _ => false, // All other errors are permanent
         }
     }
 
@@ -277,7 +277,7 @@ mod tests {
     fn test_build_otel_payload() {
         let exporter = OtelExporter::new("http://localhost:4317".to_string(), 100, 3);
 
-        let mut record = LogRecord {
+        let record = LogRecord {
             timestamp: chrono::Utc::now(),
             body: serde_json::json!("Test message"),
             severity_number: 2,
@@ -307,6 +307,7 @@ mod tests {
             max_retries: 5,
             retry_delay_ms: 200,
             timeout_secs: 60,
+            auth_header: None,
         };
 
         assert_eq!(config.batch_size, 500);
@@ -323,6 +324,7 @@ mod tests {
             max_retries: 10,
             retry_delay_ms: 50,
             timeout_secs: 45,
+            auth_header: None,
         };
 
         let exporter = OtelExporter::with_config(config.clone());

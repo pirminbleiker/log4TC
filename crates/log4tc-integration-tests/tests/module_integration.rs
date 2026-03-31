@@ -16,9 +16,11 @@ fn test_parser_core_otel_pipeline() {
     append_string(&mut data, "integration.test");
     data.push(0x02); // Info level
 
-    // Timestamps
-    data.extend_from_slice(&[0; 8]);
-    data.extend_from_slice(&[0; 8]);
+    // Timestamps (FILETIME: 100-nanosecond intervals since 1601-01-01)
+    // Use a valid timestamp: 2024-01-01 00:00:00 UTC = 133477536000000000
+    let valid_filetime: u64 = 133_477_536_000_000_000;
+    data.extend_from_slice(&valid_filetime.to_le_bytes());
+    data.extend_from_slice(&valid_filetime.to_le_bytes());
 
     // Task metadata
     data.extend_from_slice(&(1i32).to_le_bytes());

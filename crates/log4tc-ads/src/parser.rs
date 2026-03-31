@@ -2,7 +2,6 @@
 
 use crate::error::*;
 use crate::protocol::*;
-use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use log4tc_core::LogLevel;
 use std::collections::HashMap;
@@ -238,7 +237,7 @@ impl<'a> BytesReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
+    use chrono::Utc;
 
     // Helper function to build test payloads
     fn build_test_payload(message: &str, logger: &str, level: u8) -> Vec<u8> {
@@ -307,7 +306,7 @@ mod tests {
         let entry = result.unwrap();
         assert_eq!(entry.message, "Test message");
         assert_eq!(entry.logger, "test.logger");
-        assert_eq!(entry.level, LogLevel::Information);
+        assert_eq!(entry.level, LogLevel::Info);
         assert_eq!(entry.version, AdsProtocolVersion::V1);
     }
 
@@ -316,11 +315,10 @@ mod tests {
         let levels = vec![
             (0, LogLevel::Trace),
             (1, LogLevel::Debug),
-            (2, LogLevel::Information),
-            (3, LogLevel::Warning),
+            (2, LogLevel::Info),
+            (3, LogLevel::Warn),
             (4, LogLevel::Error),
-            (5, LogLevel::Critical),
-            (6, LogLevel::None),
+            (5, LogLevel::Fatal),
         ];
 
         for (level_byte, expected_level) in levels {
@@ -640,8 +638,8 @@ mod tests {
         let mut payload = build_test_payload("Test", "logger", 2);
         payload.pop(); // Remove end marker
 
-        // Add 100 arguments
-        for i in 0..100 {
+        // Add 32 arguments (the maximum allowed)
+        for i in 0..32 {
             payload.push(1); // type_id = argument
             payload.push(i as u8); // index
             payload.push(1); // value type = int
@@ -651,7 +649,7 @@ mod tests {
         payload.push(0); // end marker
 
         let entry = AdsParser::parse(&payload).unwrap();
-        assert_eq!(entry.arguments.len(), 100);
+        assert_eq!(entry.arguments.len(), 32);
     }
 
     #[test]

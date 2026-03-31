@@ -67,7 +67,8 @@ impl AdsListener {
                 .map_err(|e| AdsError::BufferError(format!("Accept error: {}", e)))?;
 
             // Acquire connection permit (respects max_connections limit)
-            let permit = self.connection_semaphore.acquire().await;
+            let semaphore = self.connection_semaphore.clone();
+            let permit = semaphore.acquire_owned().await;
             let log_tx = self.log_tx.clone();
 
             tokio::spawn(async move {

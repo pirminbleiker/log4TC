@@ -1,0 +1,34 @@
+{
+  "logging": {
+    "logLevel": "info",
+    "format": "json",
+    "outputPath": "logs/"
+  },
+  "receiver": {
+    "host": "127.0.0.1",
+    "httpPort": 4318,
+    "grpcPort": 4317,
+    "maxBodySize": 4194304,
+    "requestTimeoutSecs": 30
+  },
+  "outputs": [
+    {
+      "Type": "nlog",
+      "ConfigFile": "nlog.config"
+    },
+    {
+      "Type": "graylog",
+      "Host": "localhost",
+      "Port": 12201,
+      "Protocol": "UDP",
+      "Facility": "LOG4TC"
+    }
+  ],
+  "service": {
+    "name": "Log4TcService",
+    "displayName": "Log4TC Logging Service",
+    "workerThreads": null,
+    "channelCapacity": 10000,
+    "shutdownTimeoutSecs": 30
+  }
+}

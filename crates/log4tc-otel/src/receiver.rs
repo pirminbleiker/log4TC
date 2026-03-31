@@ -8,7 +8,6 @@ use axum::{
     Json, Router,
 };
 use log4tc_core::LogEntry;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 
@@ -70,7 +69,7 @@ impl OtelGrpcReceiver {
 /// Handle incoming OTEL logs request
 async fn handle_logs_request(
     State(log_tx): State<mpsc::Sender<LogEntry>>,
-    Json(payload): Json<serde_json::Value>,
+    Json(_payload): Json<serde_json::Value>,
 ) -> (StatusCode, String) {
     // TODO: Parse OTEL LogsData format
     // For now, accept and acknowledge

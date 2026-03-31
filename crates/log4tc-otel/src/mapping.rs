@@ -21,7 +21,6 @@ impl OtelMapping {
 mod tests {
     use super::*;
     use log4tc_core::LogLevel;
-    use std::collections::HashMap;
 
     #[test]
     fn test_mapping_log_entry_to_record() {

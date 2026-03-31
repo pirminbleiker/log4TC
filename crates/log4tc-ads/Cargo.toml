@@ -1,0 +1,22 @@
+[package]
+name = "log4tc-ads"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ADS binary protocol parser for Log4TC (legacy protocol support)"
+
+[dependencies]
+log4tc-core = { path = "../log4tc-core" }
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

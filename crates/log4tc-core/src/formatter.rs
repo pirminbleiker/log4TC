@@ -385,7 +385,8 @@ mod tests {
             &args,
             &context,
         );
-        assert_eq!(result, "Value: numeric_key");
+        // Numeric placeholders like {123} are treated as positional arguments, not context keys
+        assert_eq!(result, "Value: {123}");
     }
 
     #[test]

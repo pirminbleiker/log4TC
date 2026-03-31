@@ -179,7 +179,7 @@ fn test_mixed_type_arguments() {
         "host".to_string(),
         "message".to_string(),
         "logger".to_string(),
-        LogLevel::Warning,
+        LogLevel::Warn,
     );
 
     entry.arguments.insert(0, json!(42));
@@ -245,7 +245,7 @@ fn test_unicode_characters() {
 
     // Should preserve Unicode throughout
     assert_eq!(record.resource_attributes.get("host.name").unwrap().as_str().unwrap(), unicode_str);
-    assert_eq!(record.context.get("unicode"), Some(&json!(unicode_str)));
+    assert_eq!(record.log_attributes.get("unicode"), Some(&json!(unicode_str)));
 }
 
 // Helper function

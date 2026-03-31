@@ -1,7 +1,6 @@
 //! Configuration structures and loading
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Application-wide configuration
@@ -296,7 +295,6 @@ mod tests {
         };
 
         assert!(config.http_port > 0);
-        assert!(config.http_port < 65536);
     }
 
     #[test]
