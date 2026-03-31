@@ -16,7 +16,7 @@ The TwinCAT PLC library remains functionally unchanged; only performance optimiz
 
 ### 2.1 Overview
 
-The existing .NET-based log4TC consists of a Windows Service receiving logs from TwinCAT PLCs over the ADS binary protocol, deserializing them, and dispatching to multiple output plugins.
+The existing .NET-based log4TC consists of an application receiving logs from TwinCAT PLCs over the ADS binary protocol, deserializing them, and dispatching to multiple output plugins.
 
 ### 2.2 Component Diagram (ASCII)
 
@@ -30,7 +30,7 @@ The existing .NET-based log4TC consists of a Windows Service receiving logs from
                          │ ADS Binary (16150)
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    .NET Windows Service                         │
+│                    .NET Application                             │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ ADS Log Receiver (TwinCAT.Ads.Server)                      │ │
@@ -80,7 +80,7 @@ Legend:
 | **Log Dispatcher** | TPL Dataflow | Buffer incoming logs; async dispatch to outputs; config hot-reload |
 | **Output Plugins** | IPlugin interface | 4 implementations (NLog, Graylog, InfluxDB, SQL); vendor-specific formatting |
 | **Model** | C# POCO | LogEntry with 44 properties; Arguments dict; Context dict |
-| **Service Host** | .NET Generic Host | Windows Service integration; DI container; config management |
+| **Service Host** | .NET Generic Host | DI container; config management |
 
 ### 2.4 Data Model (LogEntry)
 
@@ -135,7 +135,7 @@ The new Rust-based architecture replaces all 4 output plugins with a unified OTL
                          │ ADS Binary (16150)
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Rust Windows Service                        │
+│                     Rust Standalone Binary                     │
 │  (Single-threaded async runtime with tokio)                    │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │

@@ -790,35 +790,39 @@ fn test_compat_output_identical() {
 
 **File location**: `tests/compat_dotnet.rs`
 
-#### 2.6.2 Windows Version Compatibility
-Test on various Windows versions without functional differences.
+#### 2.6.2 Multi-Platform Compatibility
+Test on various operating systems without functional differences.
 
 **Test Matrix**:
-| Windows Version | Rust Service | OTEL Collector | Status |
+| Platform | Rust Service | OTEL Collector | Status |
 |---|---|---|---|
-| Windows 10 (21H2) | ✓ | ✓ | Required |
-| Windows 11 (22H2) | ✓ | ✓ | Required |
-| Windows Server 2019 | ✓ | ✓ | Required |
-| Windows Server 2022 | ✓ | ✓ | Required |
+| Linux (Ubuntu 22.04) | ✓ | ✓ | Required |
+| Linux (Debian 12) | ✓ | ✓ | Required |
+| Windows 10/11 | ✓ | ✓ | Required |
+| macOS 12+ | ✓ | ✓ | Recommended |
+| Docker | ✓ | ✓ | Required |
 
 **Tests**:
-- `test_compat_windows_10_startup` - Service starts on Win10
-- `test_compat_windows_11_startup` - Service starts on Win11
-- `test_compat_windows_server_2019_startup` - Service starts on Server 2019
-- `test_compat_windows_server_2022_startup` - Service starts on Server 2022
-- `test_compat_windows_network_stack` - Network stack differences handled (TCP_NODELAY, buffer sizes)
-- `test_compat_windows_filetime_handling` - FILETIME conversion correct on all versions
+- `test_compat_linux_startup` - Service starts on Linux
+- `test_compat_windows_startup` - Service starts on Windows
+- `test_compat_macos_startup` - Service starts on macOS
+- `test_compat_docker_startup` - Service starts in Docker container
+- `test_compat_network_stack` - Network stack differences handled
+- `test_compat_filetime_handling` - FILETIME conversion correct on all platforms
 
 **Execution**:
 ```bash
-# Run on Windows 10 VM
-cargo test --test compat_windows -- --test-threads=1
+# Run on Linux
+cargo test --test compat_platforms -- --test-threads=1
 
-# Run on Windows Server 2022 VM
-cargo test --test compat_windows -- --test-threads=1
+# Run in Docker
+docker run -v $(pwd):/workspace -w /workspace rust:latest cargo test --test compat_platforms
+
+# Run cross-platform via CI
+cargo test --test compat_platforms
 ```
 
-**File location**: `tests/compat_windows.rs`
+**File location**: `tests/compat_platforms.rs`
 
 ---
 
@@ -885,12 +889,24 @@ jobs:
         run: cargo bench -- --baseline main || true
 
   compat-tests:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run Windows compatibility tests
-        run: cargo test --test compat_windows
+      - name: Run platform compatibility tests
+        run: cargo test --test compat_platforms
+
+  docker-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build Docker image
+        run: docker build -t log4tc:test .
+      - name: Run Docker tests
+        run: docker run log4tc:test cargo test --test compat_platforms
 
   coverage:
     runs-on: ubuntu-latest
@@ -926,9 +942,9 @@ cargo test -- --nocapture
 
 #### CI/CD (GitHub Actions)
 - Triggered on: Push to main, all PRs
-- Runs on: Ubuntu (unit, integration, stress), Windows (compat)
+- Runs on: Ubuntu (unit, integration, stress), Windows/macOS (compat), Docker (containerized)
 - Timeout: 120 minutes for stress tests
-- Artifacts: Coverage reports, benchmark baselines
+- Artifacts: Coverage reports, benchmark baselines, Docker images
 
 #### Staging (Optional)
 ```bash
@@ -1249,7 +1265,7 @@ All of the following must pass before production deployment:
 
 ### Reliability
 - [ ] Unit test coverage ≥80%
-- [ ] Integration tests pass on Ubuntu and Windows
+- [ ] Integration tests pass on Ubuntu, Windows, and macOS
 - [ ] Stress tests with 1000 concurrent connections complete without crash
 - [ ] Connection loss and reconnection handled cleanly
 - [ ] OTEL Collector unavailability doesn't cause data loss (if buffering enabled)
@@ -1264,7 +1280,8 @@ All of the following must pass before production deployment:
 
 ### Compatibility
 - [ ] Output byte-identical to .NET service for all 16 object types
-- [ ] Runs on Windows 10, 11, Server 2019, 2022 without functional differences
+- [ ] Runs on Windows, Linux, and macOS without functional differences
+- [ ] Docker image builds and runs successfully
 - [ ] Backward compatible: Can consume logs from existing TwinCAT 3.1+ systems
 
 ### Operations

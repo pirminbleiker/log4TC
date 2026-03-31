@@ -6,12 +6,10 @@
 3. [Configuration File Format](#configuration-file-format)
 4. [Configuration Reference](#configuration-reference)
 5. [Migration from .NET](#migration-from-net)
-6. [Installation](#installation)
-7. [Windows Service Management](#windows-service-management)
-8. [Docker Deployment](#docker-deployment)
-9. [Monitoring & Health Checks](#monitoring--health-checks)
-10. [Troubleshooting](#troubleshooting)
-11. [Example Configurations](#example-configurations)
+6. [Installation & Deployment](#installation--deployment)
+7. [Monitoring & Health Checks](#monitoring--health-checks)
+8. [Troubleshooting](#troubleshooting)
+9. [Example Configurations](#example-configurations)
 
 ---
 
@@ -55,7 +53,7 @@ Log4TC Rust Service is a high-performance, native logging bridge that receives t
 
 - **Native Rust**: High performance, minimal resource usage
 - **OpenTelemetry Compatible**: Standard telemetry protocol
-- **Windows Service**: Runs as native Windows Service
+- **OS Independent**: Runs on Windows, Linux, macOS as standalone binary or in Docker
 - **Multiple Exporters**: Support for various backends
 - **Hot Reload**: Configuration changes without restart (optional)
 - **Health Checks**: Built-in monitoring endpoints
@@ -529,359 +527,124 @@ Write-Host "Please review the generated file and adjust values as needed."
 
 ---
 
-## Installation
+## Installation & Deployment
 
 ### Prerequisites
 
-- Windows 10 or later / Windows Server 2016+
-- Administrator privileges
 - TCP ports available: 16150 (ADS), 4317/4318 (OTEL)
+- Configuration file (`log4tc.toml`)
 
-### Option 1: Windows Service Executable
+### Standalone Binary (Linux/Windows/macOS)
 
-The simplest deployment method. The executable installs/manages itself as a Windows Service.
+The simplest deployment: run the executable with a configuration file.
 
-**Installation**:
-```cmd
-log4tc-service.exe install
+**Run with default config**:
+```bash
+./log4tc
 ```
 
-**Verify**:
-```cmd
-sc query log4tc
+**Run with custom config**:
+```bash
+./log4tc --config /etc/log4tc/log4tc.toml
 ```
 
-**Output**:
-```
-SERVICE_NAME: log4tc
-        TYPE               : 10  WIN32_OWN_PROCESS
-        STATE              : 1   STOPPED
-        WIN32_EXIT_CODE    : 0   (0x0)
-        SERVICE_EXIT_CODE  : 0   (0x0)
-        CHECKPOINT         : 0x0
-        WAIT_HINT          : 0x0
+**Run with debug logging**:
+```bash
+RUST_LOG=debug ./log4tc
 ```
 
-**Configuration**:
-1. Create config directory: `mkdir C:\ProgramData\log4tc`
-2. Copy `config.toml` to `C:\ProgramData\log4tc\config.toml`
-3. Create logs directory: `mkdir C:\ProgramData\log4tc\logs`
+The binary handles graceful shutdown on SIGTERM (Unix) and Ctrl+C, flushing all pending log batches before exit.
 
-**Start the service**:
-```cmd
-net start log4tc
+### Docker Deployment
+
+Deploy as a containerized service for cloud-native environments:
+
+**Build Docker image**:
+```dockerfile
+FROM rust:latest as builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release --package log4tc-service
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates
+COPY --from=builder /build/target/release/log4tc-service /usr/local/bin/
+EXPOSE 16150
+ENTRYPOINT ["log4tc-service"]
 ```
 
-### Option 2: Manual Installation with Custom Service Name
-
-```cmd
-# Install with custom service name and display name
-sc create log4tc-prod ^
-  binPath= "C:\Program Files\log4tc\log4tc-service.exe" ^
-  DisplayName= "Log4TC Production Service" ^
-  start= auto
-
-# Set description
-sc description log4tc-prod "Log4TC Production telemetry service"
-
-# Start the service
-net start log4tc-prod
+**Run container**:
+```bash
+docker run -d \
+  --name log4tc \
+  -p 16150:16150 \
+  -v /etc/log4tc:/etc/log4tc:ro \
+  log4tc:latest --config /etc/log4tc/log4tc.toml
 ```
 
-### Option 3: Windows Installer (MSI)
+### Docker Compose
 
-A WiX-based installer is available. This provides:
-- Visual installation wizard
-- Automatic registry entries
-- Shortcuts in Start Menu
-- Uninstall support
-- Automatic config directory setup
-
-**Installation**:
-```cmd
-msiexec /i log4tc-1.0.0.msi /quiet /norestart
-```
-
-**With UI**:
-```cmd
-msiexec /i log4tc-1.0.0.msi
-```
-
-**Uninstall**:
-```cmd
-msiexec /x log4tc-1.0.0.msi /quiet
-```
-
-### Directory Structure
-
-After installation, your directory structure should look like:
-
-```
-C:\Program Files\log4tc\
-├── log4tc-service.exe          # Main service executable
-├── log4tc-service.exe.config   # .NET runtime config (if needed)
-└── README.txt                  # Installation notes
-
-C:\ProgramData\log4tc\
-├── config.toml                 # Configuration file
-├── logs\
-│   ├── log4tc.log              # Current log file (JSON)
-│   ├── log4tc.log.1            # Rotated log files
-│   └── log4tc.log.2
-└── cache\                       # Temporary files (optional)
-    └── state.dat               # Service state persistence
-```
-
----
-
-## Windows Service Management
-
-### Start/Stop/Restart
-
-**Start the service**:
-```cmd
-net start log4tc
-```
-
-**Stop the service**:
-```cmd
-net stop log4tc
-```
-
-**Restart the service**:
-```cmd
-net stop log4tc && net start log4tc
-```
-
-**Alternative using sc.exe**:
-```cmd
-sc start log4tc
-sc stop log4tc
-sc query log4tc
-```
-
-### Service Configuration
-
-**Set automatic startup**:
-```cmd
-sc config log4tc start= auto
-```
-
-**Set manual startup** (start only when needed):
-```cmd
-sc config log4tc start= demand
-```
-
-**Disable the service** (will not start even at boot):
-```cmd
-sc config log4tc start= disabled
-```
-
-**Set service dependencies** (if needed):
-```cmd
-sc config log4tc depend= Tcpip/DNS
-```
-
-### Running as Specific User
-
-By default, the service runs as `SYSTEM` (highest privileges). To run as a specific user:
-
-**Create a service account** (if not existing):
-```powershell
-# PowerShell (as Administrator)
-$password = ConvertTo-SecureString "SecurePassword123!" -AsPlainText -Force
-New-LocalUser -Name "log4tc_svc" -Password $password -FullName "Log4TC Service Account" `
-  -Description "Service account for Log4TC" -PasswordNeverExpires
-```
-
-**Assign necessary permissions**:
-```powershell
-# Add to local administrators (if needed for ADS protocol)
-Add-LocalGroupMember -Group "Administrators" -Member "log4tc_svc"
-
-# Or add specific permissions to log directory
-icacls "C:\ProgramData\log4tc" /grant "log4tc_svc:(OI)(CI)F"
-```
-
-**Configure service to run as this user**:
-```cmd
-sc config log4tc obj= ".\log4tc_svc" password= "SecurePassword123!"
-```
-
-### Recovery Options
-
-Configure automatic recovery if the service crashes:
-
-**Set recovery actions**:
-```cmd
-sc failure log4tc reset= 86400 actions= restart/5000/restart/5000/restart/60000
-```
-
-This means:
-- First failure: Restart after 5 seconds
-- Second failure: Restart after 5 seconds
-- Third failure: Restart after 60 seconds
-- Reset failure count every 24 hours (86400 seconds)
-
-**Alternative using sc.exe GUI**:
-1. Open Services (services.msc)
-2. Right-click on "log4tc"
-3. Properties → Recovery tab
-4. Set actions for "First failure", "Second failure", "Subsequent failures"
-
-### Event Log Integration
-
-Log4TC automatically logs to Windows Event Log under:
-- **Event Viewer** → Windows Logs → Application
-- **Source**: `log4tc`
-
-**View service events**:
-```powershell
-Get-EventLog -LogName Application -Source log4tc -Newest 50
-```
-
-**Monitor in real-time**:
-```powershell
-Get-EventLog -LogName Application -Source log4tc -Newest 1 -AsBaseObject | Format-List
-```
-
-### Service Status Check
-
-**Detailed status**:
-```powershell
-Get-Service -Name log4tc | Select-Object Status, StartType
-```
-
-**Continuous monitoring**:
-```powershell
-while ($true) {
-    $status = (Get-Service log4tc).Status
-    Write-Host "$(Get-Date): Service is $status"
-    Start-Sleep -Seconds 5
-}
-```
-
----
-
-## Docker Deployment
-
-While the log4tc service itself is a native Windows service, you often need to deploy an OpenTelemetry Collector and backend services. Docker Compose can orchestrate these.
-
-### Architecture
-
-```
-Windows Host
-├── log4tc service (native .exe)
-│   └─ Listens on :16150 (ADS), :4317 (OTLP)
-│
-└── Docker (on Windows)
-    ├── OTEL Collector
-    │   └─ Receives from log4tc
-    ├── Grafana Loki (log storage)
-    ├── Grafana (visualization)
-    └── Prometheus (metrics)
-```
-
-### Docker Compose File
-
-**File**: `docker-compose.yml`
+Multi-service deployment with OTEL Collector:
 
 ```yaml
-version: '3.8'
-
+version: '3'
 services:
-  # OpenTelemetry Collector
+  log4tc:
+    build: .
+    ports:
+      - "16150:16150"
+    volumes:
+      - ./log4tc.toml:/etc/log4tc/log4tc.toml:ro
+    environment:
+      RUST_LOG: info
+    depends_on:
+      - otel-collector
+
   otel-collector:
     image: otel/opentelemetry-collector:latest
-    container_name: otel-collector
     ports:
-      - "4317:4317"    # OTLP gRPC
-      - "4318:4318"    # OTLP HTTP
-      - "55679:55679"  # Collector metrics
+      - "4317:4317"  # gRPC
+      - "4318:4318"  # HTTP
     volumes:
-      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     command: ["--config=/etc/otel-collector-config.yaml"]
-    environment:
-      - GOGC=80
-    networks:
-      - log4tc-network
-
-  # Grafana Loki - Log aggregation
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-    ports:
-      - "3100:3100"
-    volumes:
-      - loki-storage:/loki
-      - ./loki-config.yaml:/etc/loki/local-config.yaml
-    command: -config.file=/etc/loki/local-config.yaml
-    networks:
-      - log4tc-network
-
-  # Grafana - Visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana-storage:/var/lib/grafana
-      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-    depends_on:
-      - loki
-    networks:
-      - log4tc-network
-
-  # Prometheus - Metrics storage
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
-      - prometheus-storage:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    networks:
-      - log4tc-network
-
-volumes:
-  loki-storage:
-  grafana-storage:
-  prometheus-storage:
-
-networks:
-  log4tc-network:
-    driver: bridge
 ```
 
-### OTEL Collector Config
+### Linux systemd
 
-**File**: `otel-collector-config.yaml`
+For traditional Linux deployments, use a systemd service unit:
 
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
+**Create `/etc/systemd/system/log4tc.service`**:
+```ini
+[Unit]
+Description=log4TC Logging Service
+Documentation=https://github.com/log4tc/log4tc
+After=network-online.target
+Wants=network-online.target
 
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: 'log4tc'
-          static_configs:
-            - targets: ['host.docker.internal:8888']  # log4tc metrics
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/log4tc --config /etc/log4tc/log4tc.toml
+Restart=on-failure
+RestartSec=10
+User=log4tc
+Group=log4tc
+StandardOutput=journal
+StandardError=journal
 
-processors:
+[Install]
+WantedBy=multi-user.target
+```
+
+**Install and start**:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable log4tc
+sudo systemctl start log4tc
+sudo systemctl status log4tc
+```
+
+---
   batch:
     send_batch_size: 512
     timeout: 5s

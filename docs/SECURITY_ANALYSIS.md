@@ -27,7 +27,7 @@ Both services process untrusted network input, requiring careful implementation 
 | **Network Exposure** | ADS Listener | Unauthorized access | Firewall, bind address restrictions |
 | **TLS Misconfiguration** | OTLP Exporter | MITM, credential leakage | Cert validation, TLS 1.2+, strong ciphers |
 | **Log Injection** | Formatter | Injection attacks in log output | Output encoding, sanitization |
-| **Privilege Escalation** | Windows Service | Elevated privileges abuse | Minimal privilege principle, LEAST_PRIVILEGE |
+| **Container Escape** | Docker Container | Privilege escalation to host | Non-root user in container, seccomp profiles |
 
 ---
 
@@ -294,31 +294,55 @@ fn expand_env_var(key: &str) -> Result<String> {
 
 ---
 
-### 5. Windows Service (Task #10) - MEDIUM PRIORITY
+### 5. Container Security (Docker Deployments) - MEDIUM PRIORITY
 
-#### 5.1 Privilege Level
+#### 5.1 Container Privileges
 
-**Issue**: Not yet implemented, but documentation should specify:
-
-**Recommendation**:
-```
-Service should run as:
-- Windows: LOCAL SERVICE account (minimal privileges)
-- NOT: SYSTEM (unless firewall/privilege escalation risk accepted)
-- NOT: Administrator
-
-Rationale:
-- Only needs to listen on ports 16150, 4317/4318
-- No file system write needed (logs go to remote collector)
-- LOCAL SERVICE has network access but not admin rights
-```
-
-#### 5.2 Configuration File ACLs
+**Issue**: Running containers with unnecessary privileges increases attack surface.
 
 **Recommendation**:
-```powershell
-# Installer should set restrictive ACLs on config file:
-icacls "C:\Program Files\Log4TC\config.toml" /grant:r "BUILTIN\Administrators:F" /grant:r "NT AUTHORITY\LOCAL SERVICE:R" /inheritance:r
+```dockerfile
+# Dockerfile - run as non-root user
+FROM debian:bookworm-slim
+RUN useradd -m log4tc
+USER log4tc
+COPY --from=builder /build/target/release/log4tc-service /usr/local/bin/
+ENTRYPOINT ["log4tc-service"]
+```
+
+#### 5.2 Docker Compose Security
+
+**Recommendation**:
+```yaml
+services:
+  log4tc:
+    build: .
+    # Do NOT use privileged: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE  # Only if needed for port binding
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+```
+
+#### 5.3 Configuration File Permissions (All Platforms)
+
+**Unix/Linux**:
+```bash
+# Config file should not be world-readable (contains potential secrets)
+chmod 600 /etc/log4tc/log4tc.toml
+chown log4tc:log4tc /etc/log4tc/log4tc.toml
+```
+
+**Docker**:
+```dockerfile
+# Copy config with restrictive permissions
+COPY --chown=log4tc:log4tc --chmod=600 config.toml /etc/log4tc/
 ```
 
 ---
@@ -468,7 +492,8 @@ async fn test_large_payload_rejected() {
 - OWASP Top 10: https://owasp.org/www-project-top-ten/
 - Secure Rust: https://anssi-fr.github.io/rust-guide/
 - TLS Best Practices: https://wiki.mozilla.org/Security/Server_Side_TLS
-- Windows Service Security: https://docs.microsoft.com/en-us/windows/win32/services/service-security
+- Docker Security Best Practices: https://docs.docker.com/engine/security/
+- CIS Docker Benchmark: https://www.cisecurity.org/benchmark/docker
 
 ---
 

@@ -924,160 +924,119 @@ async fn handle_log_entry(entry: LogEntry, dispatcher: Arc<dyn LogDispatcher>) {
 }
 ```
 
-## 8. Windows Service Integration
+## 8. Deployment
 
-### 8.1 Service Lifecycle with windows-service Crate
+The log4tc service can be deployed in multiple ways depending on your operational requirements.
 
-```rust
-use windows_service::service::{ServiceControl, ServiceControlAccept, ServiceEventHandler, ServiceHandlerAction, ServiceState, ServiceStatus, ServiceType};
-use windows_service::service_dispatcher;
+### 8.1 Standalone Binary
 
-#[derive(Default)]
-pub struct ServiceEventHandler {
-    shutdown_event: Arc<Event>,
-}
-
-impl ServiceEventHandler for ServiceEventHandler {
-    fn handle_control(&mut self, control: ServiceControl) -> ServiceHandlerAction {
-        match control {
-            ServiceControl::Interrogate => ServiceHandlerAction::ReportStatusSuccess,
-            ServiceControl::Stop | ServiceControl::Shutdown => {
-                self.shutdown_event.set().ok();
-                ServiceHandlerAction::ReportStatusSuccess
-            }
-            ServiceControl::Pause => ServiceHandlerAction::ReportStatusSuccess,
-            ServiceControl::Continue => ServiceHandlerAction::ReportStatusSuccess,
-            _ => ServiceHandlerAction::ReportStatusSuccess,
-        }
-    }
-
-    fn set_control_handler(
-        &mut self,
-        control: ServiceControl,
-    ) -> ServiceHandlerAction {
-        self.handle_control(control)
-    }
-}
-
-pub async fn run_service(config: ServiceConfig) -> Result<()> {
-    let shutdown = Arc::new(Event::new(true, false)?);
-
-    service_dispatcher::run(
-        "log4tc",
-        ServiceEventHandler {
-            shutdown_event: shutdown.clone(),
-        },
-        |_args| {
-            // Main service loop
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                // Initialize receiver, dispatcher, exporters
-                let receiver = AdsReceiver::new(config.ads.port, logger).await?;
-                let dispatcher = TokioDispatcher::new(...).await?;
-
-                // Start receiver
-                tokio::spawn({
-                    let receiver = receiver.clone();
-                    async move {
-                        receiver.start(dispatcher).await.ok();
-                    }
-                });
-
-                // Wait for shutdown signal
-                shutdown.wait().ok();
-
-                // Graceful shutdown
-                dispatcher.shutdown().await?;
-                receiver.shutdown();
-
-                Ok(())
-            })
-        },
-    )?;
-
-    Ok(())
-}
-
-pub async fn install_service() -> Result<()> {
-    let manager = ServiceManager::local_computer()?;
-    let exe_path = std::env::current_exe()?;
-
-    let service_info = ServiceInfo {
-        name: OsString::from("log4tc"),
-        display_name: OsString::from("log4TC Logging Service"),
-        service_type: ServiceType::OwnProcess,
-        start_type: ServiceStartType::AutoStart,
-        error_recovery: Some(ServiceErrorControl::Normal),
-        executable_path: exe_path,
-        launch_arguments: vec![],
-        dependencies: vec![],
-        account_name: None,
-        account_password: None,
-    };
-
-    manager.create_service(&service_info, ServiceStartType::AutoStart)?;
-    Ok(())
-}
-
-pub async fn uninstall_service() -> Result<()> {
-    let manager = ServiceManager::local_computer()?;
-    manager.delete_service("log4tc")?;
-    Ok(())
-}
-
-pub async fn start_service() -> Result<()> {
-    let manager = ServiceManager::local_computer()?;
-    manager.connect()?.start_service("log4tc")?;
-    Ok(())
-}
-
-pub async fn stop_service() -> Result<()> {
-    let manager = ServiceManager::local_computer()?;
-    manager.connect()?.stop_service("log4tc")?;
-    Ok(())
-}
-```
-
-### 8.2 Service Installation and Management
-
-The binary supports command-line arguments for service management:
+The simplest deployment: just run the executable with a configuration file.
 
 ```bash
-# Install the service
-log4tc-service.exe --install
+# Run with default config (log4tc.toml in current directory)
+./log4tc
 
-# Start the service
-log4tc-service.exe --start
+# Run with custom config file
+./log4tc --config /etc/log4tc/log4tc.toml
 
-# Stop the service
-log4tc-service.exe --stop
-
-# Uninstall the service
-log4tc-service.exe --uninstall
-
-# Run in console mode (for debugging)
-log4tc-service.exe --console
+# Run in foreground with debug logging
+RUST_LOG=debug ./log4tc
 ```
 
-### 8.3 Event Log Integration
+The standalone binary handles graceful shutdown on SIGTERM (Unix) and Ctrl+C, flushing all pending log batches before exit.
 
-Logs are written to the Windows Event Log under "Application":
+### 8.2 Docker Container
 
-```rust
-use winlog::EventLog;
+Deploy as a containerized service for cloud-native environments:
 
-fn init_event_log() -> Result<EventLog> {
-    let event_log = EventLog::new("log4tc", "Application")?;
-    Ok(event_log)
-}
+```dockerfile
+FROM rust:latest as builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release --package log4tc-service
 
-async fn log_to_event_log(event_log: &EventLog, level: i32, message: &str) {
-    event_log.log_event(
-        message,
-        vec![],
-        level, // EVENTLOG_INFORMATION_TYPE, EVENTLOG_WARNING_TYPE, EVENTLOG_ERROR_TYPE
-    ).ok();
-}
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates
+COPY --from=builder /build/target/release/log4tc-service /usr/local/bin/
+EXPOSE 16150
+ENTRYPOINT ["log4tc-service"]
+```
+
+```bash
+# Run container
+docker run -d \
+  --name log4tc \
+  -p 16150:16150 \
+  -v /etc/log4tc:/etc/log4tc:ro \
+  log4tc:latest --config /etc/log4tc/log4tc.toml
+```
+
+### 8.3 Docker Compose
+
+Multi-service deployment with OTEL Collector:
+
+```yaml
+version: '3'
+services:
+  log4tc:
+    build: .
+    ports:
+      - "16150:16150"
+    volumes:
+      - ./log4tc.toml:/etc/log4tc/log4tc.toml:ro
+    environment:
+      RUST_LOG: info
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - "4317:4317"  # gRPC
+      - "4318:4318"  # HTTP
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    command: ["--config=/etc/otel-collector-config.yaml"]
+
+  # Optional: backend for visualization
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "6831:6831/udp"
+      - "16686:16686"
+```
+
+### 8.4 Linux systemd Unit File
+
+For traditional Linux deployments, use a systemd service unit:
+
+```ini
+[Unit]
+Description=log4TC Logging Service
+Documentation=https://github.com/log4tc/log4tc
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/log4tc --config /etc/log4tc/log4tc.toml
+Restart=on-failure
+RestartSec=10
+User=log4tc
+Group=log4tc
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Installation:
+```bash
+sudo cp log4tc.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable log4tc
+sudo systemctl start log4tc
 ```
 
 ## 9. Key Trait Definitions
@@ -1195,8 +1154,6 @@ All Rust crates with version constraints and justification:
 | anyhow | ^1.0 | log4tc-service | Flexible error handling for app |
 | tracing | ^0.1 | All crates | Structured logging framework |
 | tracing-subscriber | ^0.3 | log4tc-service | Logging initialization and formatting |
-| windows-service | ^0.6 | log4tc-service | Windows service integration |
-| windows | ^0.52 | log4tc-service | Windows API bindings (Event Log, etc.) |
 | log | ^0.4 | All crates | Standard logging facade |
 | url | ^2.5 | log4tc-otel, log4tc-service | URL parsing and validation |
 | regex | ^1.10 | log4tc-core | Message filtering patterns |

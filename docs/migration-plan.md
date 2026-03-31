@@ -216,32 +216,32 @@ Location: `library/` directory
 
 ---
 
-### Phase 4: Windows Service & Production (Weeks 7-8)
+### Phase 4: Containerization & Production (Weeks 7-8)
 
-**Objective:** Create production-ready Windows service with monitoring and packaging
+**Objective:** Create production-ready containerized service with monitoring and multi-platform deployment
 
 **Tasks:**
-- Windows service integration
-  - Implement Windows service trait (install, start, stop, remove)
-  - Use `windows-service` crate for service wrapper
-  - Implement control signals handling (CTRL_C, service stop)
-  - Service recovery policy configuration
+- Containerization & platform support
+  - Docker image with minimal base (debian:bookworm-slim)
+  - docker-compose orchestration with OTEL Collector
+  - Linux systemd unit file for traditional deployments
+  - Standalone binary packaging (no OS dependencies)
+  - Cross-platform testing (Windows, Linux, macOS)
 - Installer and packaging
-  - Create MSI installer (WiX or Rust-based alternative)
-  - Registry configuration for service
-  - Automatic startup on boot
-  - Upgrade path from .NET version (config migration)
-  - Uninstaller with cleanup
+  - Standalone executable distribution
+  - Docker Hub image publishing
+  - Release artifacts for each platform
+  - Configuration migration tool from .NET version
 - Configuration management
   - TOML config file migration from existing JSON
   - Config validation on startup
   - Hot-reload capability (optional, phase 2 improvement)
   - Default configuration templates
 - Monitoring and health checks
-  - Health check endpoint (HTTP or internal)
+  - Health check endpoint (HTTP)
   - Metrics collection (messages processed, dropped, latency)
   - Structured logging for service events
-  - Event log integration (Windows Event Viewer)
+  - Prometheus metrics export
 - Performance optimization
   - Benchmarking against .NET baseline
   - Memory profiling and optimization
@@ -255,8 +255,10 @@ Location: `library/` directory
   - Security review (ADS protocol, port binding, file permissions)
 
 **Deliverable:**
-- Installable Windows service
-- Service starts automatically on boot
+- Docker image published to Docker Hub
+- docker-compose configuration for full stack deployment
+- Linux systemd unit file for traditional deployments
+- Standalone executables for Windows, Linux, macOS
 - Monitoring dashboards and metrics available
 - Config migration tool for existing deployments
 - Comprehensive error logging
@@ -362,13 +364,14 @@ Phase 3: OTLP Export (depends on Phase 1, 2)
     └─ Integration tests (depends on all above)
            |
            V
-Phase 4: Windows Service (depends on Phase 3)
-    ├─ Service wrapper (depends on receiver + exporter)
-    ├─ Installer (depends on service wrapper)
+Phase 4: Containerization & Production (depends on Phase 3)
+    ├─ Docker image (depends on complete service)
+    ├─ docker-compose orchestration (depends on Docker image)
+    ├─ systemd unit file (depends on complete service)
     ├─ Configuration management (depends on Phase 1 config)
     ├─ Monitoring (can be parallel with other tasks)
     ├─ Performance optimization (depends on complete receiver + exporter)
-    └─ Production hardening (depends on service wrapper)
+    └─ Production hardening (depends on complete service)
            |
            V
 Phase 5: Validation & Cutover (depends on Phase 4)
@@ -394,7 +397,7 @@ Phase 5: Validation & Cutover (depends on Phase 4)
 | Risk | Probability | Impact | Mitigation Strategy |
 |------|-------------|--------|---------------------|
 | **ADS Protocol Complexity** | High | High | Protocol reverse-engineering completed in Phase 2; extensive testing with real PLC messages; create protocol spec document; consider protocol library extraction for reuse |
-| **Windows Service Reliability** | Medium | High | Use proven crates (windows-service); extensive testing on Windows Server versions; implement watchdog/recovery mechanism; monitor service availability metrics |
+| **Cross-Platform Compatibility** | Medium | High | Test on Windows, Linux, macOS; containerize for consistency; use platform-agnostic Rust code; monitor platform-specific issues |
 | **Performance Regression** | Medium | High | Establish performance baseline with .NET version in week 1; benchmark each phase against baseline; optimize hot paths; consider JIT compilation options if needed |
 | **Data Loss During Migration** | Medium | High | Implement persistent message queue in Phase 4; graceful shutdown with timeout; dual-system parallel run in Phase 5; test failover scenarios extensively |
 | **Rust Ecosystem Immaturity** | Low | Medium | Lock dependencies in Cargo.lock; vendor critical crates; monitor security advisories; plan maintenance strategy for unmaintained dependencies |
@@ -430,8 +433,8 @@ Phase 5: Validation & Cutover (depends on Phase 4)
 | **Performance Metrics** | Limited built-in metrics | Prometheus metrics integration | Phase 4 | Enhanced observability |
 | **Configuration** | JSON plugin configs | TOML centralized config | Phase 1 | Consolidate all plugin configs |
 | **Output Plugins** | NLog, Graylog, InfluxDB, SQL | OTLP single exporter | Phase 3 | Collector handles backend routing |
-| **Windows Service** | TopShelf framework | Windows-service crate | Phase 4 | Equivalent functionality |
-| **Installer** | WiX (.msi) | Rust-based or WiX | Phase 4 | Equivalent installation experience |
+| **Deployment** | Windows Service only | Docker, systemd, standalone binary | Phase 4 | Multi-platform support |
+| **Packaging** | MSI installer | Docker images, native executables | Phase 4 | Platform-specific distributions |
 | **Hot-reload Config** | Limited | Optional in Phase 2 | Phase 2+ | Could be added for flexibility |
 | **Custom Plugins** | Plugin interface (.NET DLL) | No direct equivalent | Future | Community feedback determines approach |
 | **Multi-PLC Support** | Multiple connections | Native support (concurrent) | Phase 2 | Rust async naturally supports many connections |
