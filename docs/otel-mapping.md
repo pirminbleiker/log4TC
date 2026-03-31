@@ -1,178 +1,329 @@
-# OTEL Mapping & Export Specification - Log4TC
+# OpenTelemetry (OTEL) Mapping Specification for log4TC
 
-**Document Version**: 1.0  
-**OTEL Spec Version**: 1.0  
-**Last Updated**: March 31, 2026
+## 1. Overview
 
----
+log4TC is migrating from multiple custom output formats (Graylog GELF, InfluxDB, etc.) to a single, standardized [OpenTelemetry (OTEL)](https://opentelemetry.io/) output protocol. This transition provides significant benefits:
 
-## Overview
+### Why OpenTelemetry?
 
-This document specifies how Log4TC translates log entries from both ADS and OTEL protocols into the OpenTelemetry Logs Data Model, and how the Rust service exports them to OTEL collectors.
+- **Vendor-agnostic standard**: OTEL is a Cloud Native Computing Foundation (CNCF) standard, ensuring long-term stability and ecosystem support
+- **Single protocol for all backends**: Replace multiple plugin-based outputs with one unified OTLP (OpenTelemetry Protocol) implementation
+- **Ecosystem flexibility**: Route logs to any OTEL-compatible backend (Loki, Elasticsearch, Jaeger, Datadog, New Relic, etc.) via an OTEL Collector
+- **Rich semantic conventions**: Built-in support for structured logging, trace correlation, and common resource attributes
+- **Production-ready**: Wide adoption in industry with excellent tooling and documentation
+- **Simplified maintenance**: Focus on a single, well-defined protocol rather than maintaining multiple output plugins
 
----
-
-## OTEL Logs Data Model
-
-### Components
-
-```
-LogRecord
-├── Timestamp (nanoseconds since Unix epoch)
-├── ObservedTimestamp (when observed by service)
-├── Severity (number and text)
-├── SeverityText ("TRACE", "DEBUG", etc.)
-├── Body (log message string)
-├── Attributes (key-value pairs)
-├── Resource (service/host/environment info)
-├── InstrumentationScope (logger/library info)
-└── Flags & TraceContext (for tracing correlation)
-```
-
----
-
-## Field Mapping
-
-### LogEntry → OTEL LogRecord
-
-#### Resource Attributes
-
-These identify the **service/host** producing the logs.
+### Architecture
 
 ```
-Log4TC Field          OTEL Resource Attribute      Type        Notes
-─────────────────────────────────────────────────────────────────
-project_name          service.name                  string      Project name in TwinCAT
-app_name              service.instance.id           string      Application name
-hostname              host.name                     string      PLC host
-task_index            process.pid                   int         Task/process ID
-(constant)            service.namespace             string      "log4tc" (fixed)
-(constant)            telemetry.sdk.name            string      "log4tc" (fixed)
-(constant)            telemetry.sdk.language        string      "rust" (fixed)
-(constant)            telemetry.sdk.version         string      (package version)
+TwinCAT PLC
+    ↓
+ADS Binary Protocol
+    ↓
+Rust Service (log4TC)
+    ↓
+OpenTelemetry Protocol (gRPC or HTTP)
+    ↓
+OTEL Collector
+    ↓
+Backends (Loki, Elasticsearch, Jaeger, etc.)
 ```
 
-**Example Resource**:
+## 2. OpenTelemetry Logs Data Model Reference
+
+The OpenTelemetry Logs data model defines a `LogRecord` structure. Understanding this structure is essential for correct mapping:
+
+### LogRecord Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `TimeUnixNano` | `uint64` | Log record timestamp as Unix time in nanoseconds |
+| `SeverityNumber` | `int32` | Numeric severity level (0=UNSPECIFIED, 1=TRACE, 2=TRACE2, 3=TRACE3, 4=TRACE4, 5=DEBUG, 6=DEBUG2, 7=DEBUG3, 8=DEBUG4, 9=INFO, 10=INFO2, 11=INFO3, 12=INFO4, 13=WARN, 14=WARN2, 15=WARN3, 16=WARN4, 17=ERROR, 18=ERROR2, 19=ERROR3, 20=ERROR4, 21=FATAL, 22=FATAL2, 23=FATAL3, 24=FATAL4) |
+| `SeverityText` | `string` | Text representation of severity (e.g., "INFO", "ERROR") |
+| `Body` | `AnyValue` | The log message body (typically a string) |
+| `Attributes` | `map<string, AnyValue>` | Custom key-value pairs providing context |
+| `Resource` | `Resource` | Identifies the source (service, host, etc.) |
+| `InstrumentationScope` | `InstrumentationScope` | Identifies the component that produced the log |
+| `TraceId` | `bytes` | Optional trace ID for correlation with traces |
+| `SpanId` | `bytes` | Optional span ID for correlation with spans |
+| `Flags` | `uint32` | Optional trace flags (e.g., sampled flag) |
+| `DroppedAttributesCount` | `uint32` | Count of attributes not included due to limits |
+
+### Resource Object
+
+The `Resource` object describes the entity producing telemetry:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Attributes` | `map<string, AnyValue>` | Resource attributes (service.name, host.name, etc.) |
+| `DroppedAttributesCount` | `uint32` | Count of attributes not included due to limits |
+
+### AnyValue Type
+
+OTEL uses a flexible `AnyValue` type that can represent:
+- `StringValue`: UTF-8 string
+- `BoolValue`: Boolean
+- `IntValue`: 64-bit signed integer
+- `DoubleValue`: 64-bit floating-point
+- `ArrayValue`: Array of AnyValue
+- `KeyValueListValue`: Map of string keys to AnyValue
+
+## 3. LogEntry → OTEL LogRecord Mapping
+
+The log4TC `LogEntry` class is the primary data structure for logs. The following table defines how each field maps to OpenTelemetry:
+
+### Mapping Table
+
+| LogEntry Field | Target | OTEL Field | Type | Notes |
+|---|---|---|---|---|
+| `Timestamp` | LogRecord | `TimeUnixNano` | uint64 | Convert `PlcTimestamp` to Unix nanoseconds. Primary timestamp for the log record. |
+| `Level` | LogRecord | `SeverityNumber` + `SeverityText` | int32 + string | Map according to OTEL severity table below. |
+| `FormattedMessage` | LogRecord | `Body` | AnyValue (StringValue) | Preferred over raw Message; includes argument substitution. |
+| `Message` | Attributes | `log4tc.message_template` | string | Raw message template without argument substitution. |
+| `Source` | Attributes + Resource | `log4tc.source` (Attribute) + Resource | string | Source identifies the log producer. Include in both attributes and as a resource attribute. |
+| `Logger` | Attributes | `log4tc.logger` | string | Logger name or identifier. |
+| `Hostname` | Resource | `host.name` | string | Hostname of the system. |
+| `TaskName` | Attributes + Resource | `log4tc.task_name` (Attribute) + Resource | string | TwinCAT task name. Include in both. |
+| `TaskIndex` | Attributes + Resource | `log4tc.task_index` (Attribute) + Resource | int64 | Task index for identification. |
+| `TaskCycleCounter` | Attributes | `log4tc.task_cycle_counter` | int64 | Task cycle counter. |
+| `AppName` | Resource | `plc.app_name` | string | PLC application name. |
+| `ProjectName` | Resource | `plc.project_name` | string | TwinCAT project name. |
+| `PlcTimestamp` | LogRecord | `TimeUnixNano` | uint64 | Primary log record timestamp. |
+| `ClockTimestamp` | Attributes | `log4tc.clock_timestamp_iso8601` | string | System clock timestamp in ISO 8601 format for reference. |
+| `OnlineChangeCount` | Attributes | `log4tc.online_change_count` | int64 | Online change counter. |
+| `Arguments[*]` | Attributes | `log4tc.arg_<name>` | AnyValue | Each message argument is mapped with `log4tc.arg_` prefix. Type is determined from the argument's runtime type. |
+| `Context[*]` | Attributes | `log4tc.<key>` | AnyValue | Each context property is included as an attribute with `log4tc.` prefix. |
+
+### Log Level Mapping
+
+The following table maps log4TC `LogLevel` to OTEL severity:
+
+| log4TC LogLevel | OTEL SeverityNumber | OTEL SeverityText | Rationale |
+|---|---|---|---|
+| `Trace` | 1 | `TRACE` | Low-level diagnostic information |
+| `Debug` | 5 | `DEBUG` | Diagnostic information useful for developers |
+| `Info` | 9 | `INFO` | General informational message |
+| `Warn` | 13 | `WARN` | Warning condition that should be investigated |
+| `Error` | 17 | `ERROR` | Error condition indicating failure |
+| `Fatal` | 21 | `FATAL` | Critical error that may cause shutdown |
+
+## 4. Resource Attributes
+
+The Resource object identifies the log source and must include the following attributes:
+
+### Required Resource Attributes
+
+| Attribute | Value | Description |
+|---|---|---|
+| `service.name` | `"log4tc"` | Fixed service identifier |
+| `service.version` | `"<version>"` | log4TC service version (e.g., "2.0.0") |
+| `host.name` | `<Hostname>` | From `LogEntry.Hostname` |
+
+### Recommended Resource Attributes
+
+| Attribute | Value | Source | Description |
+|---|---|---|---|
+| `plc.task_name` | `<TaskName>` | From `LogEntry.TaskName` | TwinCAT task name |
+| `plc.task_index` | `<TaskIndex>` | From `LogEntry.TaskIndex` | Task index |
+| `plc.app_name` | `<AppName>` | From `LogEntry.AppName` | PLC application name |
+| `plc.project_name` | `<ProjectName>` | From `LogEntry.ProjectName` | TwinCAT project name |
+| `service.instance.id` | `<Source>` | From `LogEntry.Source` | Unique service instance identifier |
+
+### Example Resource
+
 ```json
 {
-  "service.name": "MotorController",
-  "service.instance.id": "MainApp",
-  "host.name": "plc-01.factory.local",
-  "process.pid": 1,
-  "service.namespace": "log4tc",
-  "telemetry.sdk.name": "log4tc",
-  "telemetry.sdk.language": "rust",
-  "telemetry.sdk.version": "1.0.0"
+  "attributes": {
+    "service.name": "log4tc",
+    "service.version": "2.0.0",
+    "host.name": "plc-host-01",
+    "plc.app_name": "MyApplication",
+    "plc.project_name": "TwinCAT_Project",
+    "plc.task_name": "PlcTask",
+    "plc.task_index": 1,
+    "service.instance.id": "192.168.1.100"
+  }
 }
 ```
 
-#### Scope Attributes
+## 5. OTLP Export Configuration
 
-These identify the **logger/library** producing logs.
+### Protocol Selection
 
-```
-Log4TC Field          OTEL Scope Attribute         Type        Notes
-─────────────────────────────────────────────────────────────────
-logger                logger.name                   string      Logger component name
-(constant)            code.namespace                string      "log4tc" (fixed)
-```
+log4TC supports two OTLP protocols:
 
-**Example Scope**:
-```json
-{
-  "logger.name": "Hardware.Motors.Controller",
-  "code.namespace": "log4tc"
-}
-```
+#### gRPC (Recommended for Production)
 
-#### Log Record Body and Severity
+- **Endpoint**: `grpc://localhost:4317` (default OTEL Collector)
+- **Protocol**: HTTP/2 with Protocol Buffers
+- **Compression**: gzip (recommended)
+- **Connection**: Persistent, multiplexed
+- **Bandwidth**: More efficient than HTTP
 
-```
-Log4TC Field          OTEL Field                    Type        Notes
-─────────────────────────────────────────────────────────────────
-message               body                          string      Formatted log message
-level                 severity_number               int         0→1, 1→5, 2→9, 3→13, 4→17, 5→21
-level                 severity_text                 string      "TRACE", "DEBUG", "INFO", etc.
+```toml
+[otlp]
+protocol = "grpc"
+endpoint = "localhost:4317"
+compression = "gzip"
+timeout_ms = 10000
+headers = { "Authorization" = "Bearer <token>" }
 ```
 
-**Severity Mapping**:
-```
-Log4TC Level  →  OTEL Severity#  →  OTEL Severity Text
-─────────────────────────────────────────────────────
-Trace (0)     →  1               →  "TRACE"
-Debug (1)     →  5               →  "DEBUG"
-Info (2)      →  9               →  "INFO"
-Warn (3)      →  13              →  "WARN"
-Error (4)     →  17              →  "ERROR"
-Fatal (5)     →  21              →  "FATAL"
-```
+#### HTTP/Protobuf
 
-#### Log Record Attributes
+- **Endpoint**: `http://localhost:4318/v1/logs`
+- **Protocol**: HTTP/1.1 with Protocol Buffers
+- **Compression**: gzip
+- **Connection**: Connection pooling recommended
+- **Bandwidth**: Less efficient than gRPC
 
-These are **custom attributes** specific to each log entry.
-
-```
-Log4TC Field              OTEL Log Attribute           Type        Notes
-──────────────────────────────────────────────────────────────────
-plc_timestamp             plc.timestamp                string      ISO8601 format
-clock_timestamp           clock.timestamp              string      ISO8601 format
-task_name                 process.command_line         string      Task name
-task_cycle_counter        task.cycle                   int         Cycle counter
-online_change_count       online.changes               int         Deployment count
-(source IP:Port)          source.address               string      TCP/UDP source
-(none)                    service.version              string      (if available)
-
-arguments[0]              arg.0                        any         Message argument #0
-arguments[1]              arg.1                        any         Message argument #1
-arguments[n]              arg.n                        any         Message argument #n
-
-context[key]              context.key                  any         Custom context variable
+```toml
+[otlp]
+protocol = "http"
+endpoint = "http://localhost:4318"
+content_encoding = "gzip"
+timeout_ms = 10000
+headers = { "Authorization" = "Bearer <token>" }
 ```
 
-**Example Log Attributes**:
-```json
-{
-  "plc.timestamp": "2026-03-31T10:30:45.123456Z",
-  "clock.timestamp": "2026-03-31T10:30:45.234567Z",
-  "process.command_line": "MainTask",
-  "task.cycle": 1000,
-  "online.changes": 0,
-  "source.address": "192.168.1.100:54321",
-  "arg.0": 42,
-  "arg.1": "motor_speed",
-  "context.user": "operator1",
-  "context.shift": "morning"
-}
+### Connection Configuration
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `endpoint` | string | `localhost:4317` | OTEL Collector endpoint |
+| `protocol` | enum | `grpc` | Transport protocol (grpc or http) |
+| `timeout_ms` | int | 10000 | Request timeout in milliseconds |
+| `compression` | string | `gzip` | Compression algorithm (none, gzip, zstd) |
+| `headers` | map | {} | Custom HTTP headers for authentication |
+| `certificate_path` | string | None | Path to TLS certificate for gRPC |
+| `insecure` | bool | false | Allow insecure TLS (dev only) |
+
+### Example Configuration
+
+```toml
+[otlp]
+protocol = "grpc"
+endpoint = "localhost:4317"
+compression = "gzip"
+timeout_ms = 10000
+insecure = false
+
+# Optional headers for authentication
+[otlp.headers]
+Authorization = "Bearer eyJhbGc..."
+X-Custom-Header = "value"
 ```
 
----
+## 6. Batching & Retry
 
-## Complete Mapping Example
+log4TC uses a `BatchLogRecordProcessor` to optimize throughput and reduce network overhead.
 
-### Input: Log4TC LogEntry
+### Batch Configuration
 
-```rust
-LogEntry {
-    version: 1,
-    message: "Motor speed exceeded: {0} RPM, threshold: {1}",
-    logger: "Hardware.Motors.SpeedMonitor",
-    level: Warn,
-    plc_timestamp: DateTime<2026-03-31T10:30:45.123456Z>,
-    clock_timestamp: DateTime<2026-03-31T10:30:45.234567Z>,
-    task_index: 1,
-    task_name: "MainTask",
-    task_cycle_counter: 5000,
-    app_name: "FactoryController",
-    project_name: "AutomationSystem",
-    hostname: "plc-01.factory.local",
-    online_change_count: 2,
-    source: "192.168.1.100:54321",
-    arguments: {0: 3500, 1: 3000},
-    context: {"user": "operator1", "shift": "morning"}
-}
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `batch_size` | int | 512 | Maximum number of LogRecords in a batch |
+| `max_queue_size` | int | 2048 | Maximum number of LogRecords queued |
+| `scheduled_delay_millis` | int | 5000 | Delay before flushing a partial batch (5 seconds) |
+| `export_timeout_millis` | int | 30000 | Timeout for a single export request (30 seconds) |
+
+### Retry Strategy
+
+Retry uses exponential backoff with jitter:
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `initial_interval_millis` | int | 100 | Initial retry delay |
+| `max_interval_millis` | int | 10000 | Maximum retry delay (10 seconds) |
+| `multiplier` | float | 1.5 | Exponential backoff multiplier |
+| `max_attempts` | int | 5 | Maximum retry attempts before dropping |
+
+### Retry Algorithm
+
+```
+delay = initial_interval_millis
+for attempt in 0..max_attempts:
+    try export()
+    if success:
+        return
+    delay = min(delay * multiplier, max_interval_millis)
+    delay += random(0, delay * 0.1)  # jitter
+    sleep(delay)
+drop_batch()
 ```
 
-### Output: OTEL LogRecord (JSON)
+### Configuration Example
+
+```toml
+[otlp.batch]
+batch_size = 512
+max_queue_size = 2048
+scheduled_delay_millis = 5000
+export_timeout_millis = 30000
+
+[otlp.retry]
+initial_interval_millis = 100
+max_interval_millis = 10000
+multiplier = 1.5
+max_attempts = 5
+```
+
+## 7. Semantic Conventions
+
+log4TC adheres to the following OTEL semantic conventions:
+
+### Log Attributes
+
+| Attribute | Description | Example |
+|---|---|---|
+| `log.level` | Deprecated; use SeverityText instead | "INFO" |
+| `log.record.uid` | Unique log record identifier | UUID or sequence |
+| `log.record.original` | Original unformatted log message | Message template |
+
+### Host Attributes
+
+| Attribute | Description | Example |
+|---|---|---|
+| `host.name` | Hostname | "plc-01" |
+| `host.id` | Unique host identifier | AMS Net ID |
+| `host.ip` | Host IP address | "192.168.1.100" |
+| `host.arch` | CPU architecture | "x86_64" |
+
+### Service Attributes
+
+| Attribute | Description | Example |
+|---|---|---|
+| `service.name` | Service name | "log4tc" |
+| `service.version` | Service version | "2.0.0" |
+| `service.instance.id` | Service instance | "192.168.1.100" |
+| `service.namespace` | Service namespace | "log4tc-prod" |
+
+### Process Attributes
+
+| Attribute | Description | Example |
+|---|---|---|
+| `process.pid` | Process ID | 1234 |
+| `process.executable.name` | Executable name | "log4tc" |
+
+### Custom log4TC Attributes
+
+All log4TC-specific attributes use the `log4tc.` prefix:
+
+| Attribute | Description | Type |
+|---|---|---|
+| `log4tc.source` | Log source identifier | string |
+| `log4tc.logger` | Logger name | string |
+| `log4tc.message_template` | Unformatted message | string |
+| `log4tc.task_name` | TwinCAT task name | string |
+| `log4tc.task_index` | Task index | int64 |
+| `log4tc.task_cycle_counter` | Task cycle counter | int64 |
+| `log4tc.clock_timestamp_iso8601` | System clock time | string |
+| `log4tc.online_change_count` | Online change counter | int64 |
+| `log4tc.arg_<name>` | Message argument | AnyValue |
+
+## 8. Example OTLP Payloads
+
+### Example 1: Simple Info Log
 
 ```json
 {
@@ -180,43 +331,30 @@ LogEntry {
     {
       "resource": {
         "attributes": [
-          {"key": "service.name", "value": {"stringValue": "AutomationSystem"}},
-          {"key": "service.instance.id", "value": {"stringValue": "FactoryController"}},
-          {"key": "host.name", "value": {"stringValue": "plc-01.factory.local"}},
-          {"key": "process.pid", "value": {"intValue": "1"}},
-          {"key": "service.namespace", "value": {"stringValue": "log4tc"}},
-          {"key": "telemetry.sdk.name", "value": {"stringValue": "log4tc"}},
-          {"key": "telemetry.sdk.language", "value": {"stringValue": "rust"}}
+          { "key": "service.name", "value": { "stringValue": "log4tc" } },
+          { "key": "service.version", "value": { "stringValue": "2.0.0" } },
+          { "key": "host.name", "value": { "stringValue": "plc-01" } },
+          { "key": "plc.project_name", "value": { "stringValue": "MyProject" } }
         ]
       },
       "scopeLogs": [
         {
           "scope": {
-            "name": "Hardware.Motors.SpeedMonitor",
-            "attributes": [
-              {"key": "code.namespace", "value": {"stringValue": "log4tc"}}
-            ]
+            "name": "log4tc",
+            "version": "2.0.0"
           },
           "logRecords": [
             {
-              "timeUnixNano": "1743380445123456000",
-              "observedTimeUnixNano": "1743380445234567000",
-              "severityNumber": 13,
-              "severityText": "WARN",
-              "body": {
-                "stringValue": "Motor speed exceeded: 3500 RPM, threshold: 3000"
-              },
+              "timeUnixNano": "1648742400000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "Task cycle started" },
               "attributes": [
-                {"key": "plc.timestamp", "value": {"stringValue": "2026-03-31T10:30:45.123456Z"}},
-                {"key": "clock.timestamp", "value": {"stringValue": "2026-03-31T10:30:45.234567Z"}},
-                {"key": "process.command_line", "value": {"stringValue": "MainTask"}},
-                {"key": "task.cycle", "value": {"intValue": "5000"}},
-                {"key": "online.changes", "value": {"intValue": "2"}},
-                {"key": "source.address", "value": {"stringValue": "192.168.1.100:54321"}},
-                {"key": "arg.0", "value": {"intValue": "3500"}},
-                {"key": "arg.1", "value": {"intValue": "3000"}},
-                {"key": "context.user", "value": {"stringValue": "operator1"}},
-                {"key": "context.shift", "value": {"stringValue": "morning"}}
+                { "key": "log4tc.source", "value": { "stringValue": "192.168.1.100" } },
+                { "key": "log4tc.logger", "value": { "stringValue": "PlcTask" } },
+                { "key": "log4tc.task_name", "value": { "stringValue": "PlcTask" } },
+                { "key": "log4tc.task_index", "value": { "intValue": "1" } },
+                { "key": "log4tc.task_cycle_counter", "value": { "intValue": "42" } }
               ]
             }
           ]
@@ -227,446 +365,348 @@ LogEntry {
 }
 ```
 
----
+### Example 2: Error Log with Arguments
 
-## Export Configuration
-
-### OTLP Export Protocol
-
-#### Option A: HTTP/JSON (Recommended)
-
-```
-Protocol: HTTP POST
-Endpoint: https://collector.example.com:4318/v1/logs
-Content-Type: application/json
-Headers:
-  Authorization: Bearer <token>
-  User-Agent: log4tc/1.0
-
-Advantages:
-  - Human-readable payloads
-  - Easy to debug
-  - Works with most collectors
-
-Disadvantages:
-  - Larger payload size (~2-3x vs protobuf)
-  - Slightly higher CPU (JSON encoding)
-```
-
-**Request Example**:
-```http
-POST /v1/logs HTTP/1.1
-Host: collector.example.com:4318
-Content-Type: application/json
-Content-Length: 1250
-Authorization: Bearer token123
-
+```json
 {
-  "resourceLogs": [...]
-}
-```
-
-#### Option B: HTTP/Protobuf
-
-```
-Protocol: HTTP POST
-Endpoint: https://collector.example.com:4318/v1/logs
-Content-Type: application/x-protobuf
-Headers:
-  Authorization: Bearer <token>
-
-Advantages:
-  - Compact binary format
-  - Lower bandwidth
-  - Standard OTEL specification
-
-Disadvantages:
-  - Not human-readable
-  - Requires protobuf library
-```
-
-#### Option C: gRPC
-
-```
-Protocol: gRPC (HTTP/2 multiplexed)
-Endpoint: collector.example.com:4317
-TLS: Required (default)
-
-Advantages:
-  - Bidirectional streaming
-  - Connection reuse
-  - Native flow control
-
-Disadvantages:
-  - More complex implementation
-  - Requires gRPC library and HTTP/2
-```
-
-### Batching
-
-```
-Default batch size: 100 logs
-Max queue before batch: 50 logs
-Flush timeout: 5 seconds (if batch not full)
-
-Logic:
-1. Accumulate LogRecords in buffer
-2. When buffer reaches batch_size → export immediately
-3. If no new logs for flush_timeout → export partial batch
-4. Prevents: memory growth, stale logs
-```
-
-**Example**:
-```
-Timeline:
-T=0.0s   LogRecord #1 arrives (buffer_size=1)
-T=0.5s   LogRecord #50 arrives (buffer_size=50)
-T=1.0s   LogRecord #100 arrives (buffer_size=100)
-         → Export batch immediately (100 logs)
-         → Reset buffer
-T=1.5s   LogRecord #101 arrives (buffer_size=1)
-T=6.5s   5 second timeout reached, only 1 log in buffer
-         → Export partial batch (1 log)
-```
-
-### Retry Policy
-
-```
-Retry Strategy: Exponential backoff with cap
-
-Attempt  Wait Time  Cumulative Time
-────────────────────────────────
-1        100ms      100ms
-2        200ms      300ms
-3        400ms      700ms
-4        800ms      1500ms
-5        1600ms     3100ms (capped at 5s from here)
-6        5s         8100ms
-7        5s         13100ms
-8        5s         18100ms
-Max retries: 8 (total max wait: ~30 seconds before giving up)
-
-On final failure:
-- Log error with details
-- Drop batch (prevent memory growth)
-- Continue processing new logs
-```
-
-**Code Logic**:
-```rust
-async fn export_with_retry(batch: Vec<LogRecord>) -> Result<()> {
-    let mut wait_ms = 100;
-    let max_wait_ms = 5000;
-    
-    for attempt in 1..=8 {
-        match self.client.post(&self.endpoint)
-            .json(&batch)
-            .send()
-            .await
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "log4tc" } },
+          { "key": "service.version", "value": { "stringValue": "2.0.0" } },
+          { "key": "host.name", "value": { "stringValue": "plc-01" } },
+          { "key": "plc.app_name", "value": { "stringValue": "MotionControl" } }
+        ]
+      },
+      "scopeLogs": [
         {
-            Ok(resp) if resp.status().is_success() => return Ok(()),
-            Ok(resp) if resp.status() == 429 => {
-                // Rate limited - back off
-                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+          "scope": {
+            "name": "log4tc"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1648742401000000000",
+              "severityNumber": 17,
+              "severityText": "ERROR",
+              "body": { "stringValue": "Motor 1 error: Position mismatch 45.5 degrees, tolerance 2.0" },
+              "attributes": [
+                { "key": "log4tc.source", "value": { "stringValue": "192.168.1.100" } },
+                { "key": "log4tc.logger", "value": { "stringValue": "MotorControl" } },
+                { "key": "log4tc.task_name", "value": { "stringValue": "MotionTask" } },
+                { "key": "log4tc.message_template", "value": { "stringValue": "Motor {} error: {} {}, tolerance {}" } },
+                { "key": "log4tc.arg_motor_id", "value": { "intValue": "1" } },
+                { "key": "log4tc.arg_error", "value": { "stringValue": "Position mismatch" } },
+                { "key": "log4tc.arg_value", "value": { "doubleValue": 45.5 } },
+                { "key": "log4tc.arg_tolerance", "value": { "doubleValue": 2.0 } }
+              ]
             }
-            Err(e) if e.is_timeout() || e.is_connect() => {
-                // Network error - back off
-                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-            }
-            Err(e) => {
-                // Fatal error
-                return Err(e.into());
-            }
+          ]
         }
-        
-        wait_ms = std::cmp::min(wait_ms * 2, max_wait_ms);
+      ]
     }
-    
-    // Exhausted retries
-    eprintln!("Failed to export {} logs after 8 attempts", batch.len());
-    Ok(()) // Don't fail service, just log
+  ]
 }
 ```
 
----
+### Example 3: Batch Export (Multiple Logs)
 
-## TLS/HTTPS Configuration
-
-### Enforcement
-
-```rust
-// In exporter setup:
-let client = reqwest::Client::builder()
-    .https_only(true)  // Reject non-HTTPS endpoints
-    .timeout(Duration::from_secs(30))
-    .build()?;
+```json
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "log4tc" } },
+          { "key": "service.version", "value": { "stringValue": "2.0.0" } },
+          { "key": "host.name", "value": { "stringValue": "plc-01" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "log4tc",
+            "version": "2.0.0"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1648742400000000000",
+              "severityNumber": 5,
+              "severityText": "DEBUG",
+              "body": { "stringValue": "Debug message 1" },
+              "attributes": [
+                { "key": "log4tc.source", "value": { "stringValue": "192.168.1.100" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1648742401000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "Info message 2" },
+              "attributes": [
+                { "key": "log4tc.source", "value": { "stringValue": "192.168.1.100" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1648742402000000000",
+              "severityNumber": 13,
+              "severityText": "WARN",
+              "body": { "stringValue": "Warning message 3" },
+              "attributes": [
+                { "key": "log4tc.source", "value": { "stringValue": "192.168.1.100" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
-### Certificate Validation
+## 9. OTEL Collector Configuration
 
-```
-By default:
-- System root CA store is used
-- Server certificate is validated
-- Hostname verification is performed
-- Self-signed certificates are rejected
+The OTEL Collector is a standalone service that receives logs from log4TC and routes them to backends. The following examples demonstrate common setups.
 
-To allow self-signed (development only):
-export OTEL_EXPORTER_OTLP_INSECURE=false
-// Still requires proper hostname in cert
-```
+### Basic Receiver Configuration
 
-### Custom Certificates
-
-```rust
-// Load custom CA certificate
-let ca_cert = reqwest::Certificate::from_pem(&ca_pem)?;
-
-let client = reqwest::Client::builder()
-    .add_root_certificate(ca_cert)
-    .https_only(true)
-    .build()?;
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 ```
 
----
+### Example 1: Grafana Loki Backend
 
-## Environment Variables
+Loki stores logs efficiently and integrates with Grafana for visualization.
 
-### OTEL Standard Variables
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
 
-```bash
-# Collector endpoint (required)
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4318
+processors:
+  batch:
+    send_batch_size: 100
+    timeout: 10s
+  
+  # Optional: filter/transform logs
+  attributes:
+    actions:
+      - key: environment
+        value: production
+        action: insert
 
-# Headers (authentication, custom headers)
-export OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20token,CustomHeader=value
+exporters:
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    # Tenant ID (if using multi-tenancy)
+    tenant_id: "default"
 
-# Protocol (http/protobuf or grpc)
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-
-# Timeout (seconds)
-export OTEL_EXPORTER_OTLP_TIMEOUT=30
-
-# TLS certificate file
-export OTEL_EXPORTER_OTLP_CERTIFICATE=/path/to/ca-bundle.crt
-
-# Insecure mode (development only, false by default)
-export OTEL_EXPORTER_OTLP_INSECURE=false
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch, attributes]
+      exporters: [loki]
 ```
 
-### Log4TC Specific Variables
+### Example 2: Elasticsearch Backend
 
-```bash
-# Configuration file
-export LOG4TC_CONFIG=/etc/log4tc/config.toml
+Elasticsearch provides full-text search and analytics on logs.
 
-# Batch size for export
-export LOG4TC_BATCH_SIZE=100
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
 
-# Max retries on export failure
-export LOG4TC_MAX_RETRIES=8
+processors:
+  batch:
+    send_batch_size: 100
+    timeout: 10s
 
-# Flush timeout (seconds)
-export LOG4TC_FLUSH_TIMEOUT=5
+exporters:
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    auth:
+      authenticator: basicauth/elastic
+    pipeline: es_pipeline
+    logs_index: "otel-logs-%{+yyyy.MM.dd}"
 
-# Log level for service
-export RUST_LOG=info,log4tc=debug
+extensions:
+  basicauth/elastic:
+    client_auth:
+      username: elastic
+      password: ${ELASTICSEARCH_PASSWORD}
+
+service:
+  extensions: [basicauth/elastic]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [elasticsearch]
 ```
 
-### Example Setup
+### Example 3: Jaeger Backend
 
-```bash
-#!/bin/bash
+Jaeger supports trace correlation for logs.
 
-# Jaeger collector (local development)
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-export OTEL_EXPORTER_OTLP_INSECURE=true
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 
-# Or: Grafana Cloud (production)
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://logs-prod-us-central1.grafana.net:443/loki/api/v1/otlp
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer grafana-api-token"
+processors:
+  batch:
+    send_batch_size: 100
+    timeout: 10s
+  
+  # Add resource detection (AWS, GCP, etc.)
+  resource/detect:
+    detectors: [system]
 
-# Or: Google Cloud Logging
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://opentelemetry.googleapis.com:443
+exporters:
+  jaeger:
+    endpoint: http://jaeger:14250
+    tls:
+      insecure: true
 
-# Or: Datadog
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://http-intake.logs.datadoghq.com:443
-export OTEL_EXPORTER_OTLP_HEADERS="DD-API-KEY=datadog-api-key"
-
-# Common settings
-export LOG4TC_BATCH_SIZE=100
-export LOG4TC_FLUSH_TIMEOUT=5
-export RUST_LOG=info
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource/detect]
+      exporters: [jaeger]
 ```
 
----
+### Example 4: Multi-Backend Setup
 
-## Semantic Conventions
+Route logs to multiple backends simultaneously.
 
-### Service
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
 
-```
-service.name                string    Name of the service
-service.namespace           string    Namespace of the service
-service.instance.id         string    Instance ID of the service
-service.version             string    Version of the service
-```
+processors:
+  batch:
+    send_batch_size: 100
+    timeout: 10s
+  
+  # Enrich logs with environment info
+  resource:
+    attributes:
+      - key: environment
+        value: production
+        action: insert
 
-### Host
+exporters:
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    logs_index: "otel-logs-%{+yyyy.MM.dd}"
+  logging:  # For debugging
+    loglevel: debug
 
-```
-host.name                   string    Hostname
-host.id                     string    Unique host identifier
-host.type                   string    Type of host (physical, vm, etc)
-```
-
-### Process
-
-```
-process.pid                 int       Process ID
-process.executable.name     string    Executable name
-process.command_line        string    Full command line
-process.parent_pid          int       Parent process ID
-```
-
-### Source
-
-```
-source.address              string    Source IP or hostname
-source.port                 int       Source port number
-```
-
-### Custom Log4TC Attributes
-
-```
-plc.timestamp               string    Timestamp from PLC (ISO8601)
-task.cycle                  int       Task cycle counter
-online.changes              int       Online change count
-arg.n                       any       Message template argument
-context.*                   any       Custom context variable
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [loki, elasticsearch, logging]
 ```
 
----
+## 10. Performance Considerations
 
-## Compatibility
+### Attribute Cardinality
 
-### Collectors Tested
+High cardinality attributes (many unique values) can significantly impact performance and storage costs. Guidelines:
 
-- **Jaeger** (OpenTelemetry Reference Implementation)
-- **Grafana Cloud** (SaaS observability)
-- **Google Cloud Logging** (via OTLP receiver)
-- **Datadog** (via OTLP receiver)
-- **Dynatrace** (via OTLP receiver)
-- **New Relic** (via OTLP receiver)
-- **Splunk** (via OTLP receiver)
+- **Low cardinality** (< 1000 unique values): Safe for all backends. Examples: `service.name`, `host.name`, `log4tc.task_name`
+- **Medium cardinality** (1000-100k unique values): Use with caution. Examples: `log4tc.source`, user IDs
+- **High cardinality** (> 100k unique values): Avoid or aggregate. Examples: Request IDs, timestamps with millisecond precision
 
-### Backend Support
+### Recommendations
 
-From OTEL collector, logs can be routed to:
-- Datadog
-- Elasticsearch/OpenSearch
-- Grafana Loki
-- Google Cloud Logging
-- Splunk
-- Dynatrace
-- AWS CloudWatch
-- Azure Monitor
-- Prometheus (via prometheus-remote-write exporter)
+1. **Avoid dynamic attributes**: Do not create attributes from unbounded data (e.g., user input, request parameters with many variations)
+2. **Pre-aggregate arguments**: If arguments contain high-cardinality values, consider pre-processing or sampling
+3. **Use Resource attributes sparingly**: Resource attributes apply to all logs, multiplying their cardinality impact
+4. **Set reasonable batch sizes**: Larger batches (512-1024) reduce network overhead but increase memory usage
 
----
+### Attribute Value Size Limits
 
-## Troubleshooting
+Most backends have limits on attribute value sizes:
 
-### Check Connectivity
+| Backend | Limit | Recommendation |
+|---|---|---|
+| Loki | No explicit limit, but long strings impact performance | Max 4KB per attribute |
+| Elasticsearch | 256KB per field | Max 8KB per attribute |
+| Datadog | 128KB per attribute | Max 4KB per attribute |
+| Generic | Varies | Max 1KB per attribute |
 
-```bash
-# Test OTLP endpoint
-curl -v -X POST https://collector:4318/v1/logs \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer token" \
-  -d '{"resourceLogs":[]}'
+### Recommendations
 
-# Should return 200 OK (even with empty logs)
+- **Truncate large values**: Log messages are typically limited to 4KB
+- **Avoid nested objects**: Use flat attribute names with dots (e.g., `context.user.id`)
+- **Disable verbose arguments**: In production, consider filtering or sampling verbose argument logs
+
+### Memory Management
+
+The BatchLogRecordProcessor queues logs in memory:
+
+- **Queue size**: `max_queue_size = 2048` (default) allows up to 2048 pending logs
+- **Memory per log**: Typical log record ~500 bytes + attributes
+- **Max memory**: 2048 × 500 bytes ≈ 1 MB (plus OS overhead)
+
+### Adjustments for High-Volume Scenarios
+
+For high-volume logging (> 10,000 logs/sec):
+
+1. Increase batch size: `batch_size = 2048`
+2. Increase queue size: `max_queue_size = 8192`
+3. Reduce scheduled delay: `scheduled_delay_millis = 2000`
+4. Use gRPC with compression for lower bandwidth
+5. Consider sampling for lower-criticality logs
+
+### Sampling Configuration
+
+Implement sampling to reduce volume for development/testing:
+
+```toml
+[otlp.sampling]
+enabled = true
+sampling_rate = 0.1  # 10% of logs
+rules = [
+  { level = "ERROR", sampling_rate = 1.0 },      # Always sample errors
+  { level = "WARN", sampling_rate = 0.5 },       # Sample 50% of warnings
+  { level = "INFO", sampling_rate = 0.1 },       # Sample 10% of info logs
+  { level = "DEBUG", sampling_rate = 0.01 },     # Sample 1% of debug logs
+]
 ```
 
-### Enable Debug Logging
+### Summary
 
-```bash
-export RUST_LOG=trace,log4tc=trace
+| Scenario | Recommendation |
+|---|---|
+| Development | High sampling rate, no compression, HTTP protocol |
+| Production | Full logs, gRPC + gzip, max batch size |
+| High-volume | Sampling + batching, tune queue size |
+| Low-bandwidth | gRPC + gzip, smaller batches |
+| Low-latency | Smaller batches, shorter scheduled_delay |
 
-# This will show:
-# - Each log entry received
-# - Serialization details
-# - HTTP requests/responses
-# - Retry attempts
-```
-
-### Verify Exporter Configuration
-
-```bash
-# Check environment variables
-env | grep -i otel
-
-# Check config file
-cat /etc/log4tc/config.toml | grep -A5 otel
-```
-
-### Common Issues
-
-1. **"HTTPS only" error**
-   - Cause: Endpoint is http://, not https://
-   - Fix: Use https:// URL or set OTEL_EXPORTER_OTLP_INSECURE=false
-
-2. **"Certificate validation failed"**
-   - Cause: Self-signed cert or custom CA
-   - Fix: Provide CA cert via OTEL_EXPORTER_OTLP_CERTIFICATE
-
-3. **"429 Too Many Requests"**
-   - Cause: Rate limited by collector
-   - Fix: Reduce batch size, increase flush timeout, or increase quota
-
-4. **"Connection timeout"**
-   - Cause: Collector unreachable or slow
-   - Fix: Check network, verify endpoint, increase timeout
-
----
-
-## Performance
-
-### Throughput
-
-```
-At 10,000 logs/sec with 100-log batches:
-- 100 batches/sec exported
-- ~1MB/sec with JSON encoding
-- ~300KB/sec with protobuf encoding
-- Network: ~10Mbps (JSON) or ~3Mbps (protobuf)
-```
-
-### Latency
-
-```
-From LogEntry arrival to OTEL export:
-- Parsing:        <1ms
-- Conversion:     <1ms
-- Batching wait:  0-5s (configurable)
-- HTTP POST:      10-100ms (depending on network)
-
-Total (95th percentile): ~50-100ms
-Total (99th percentile): ~150-300ms
-```
-
-### Memory
-
-```
-Batching buffer (100 logs):
-- Each LogRecord: ~2-3KB (JSON), ~500B (protobuf)
-- 100 logs: 200-300KB buffered
-- Minimal heap impact
-```
-
----
-
-**Document Status**: Complete  
-**OTEL Spec Version**: 1.0.2  
-**Last Review**: March 31, 2026

@@ -1,598 +1,761 @@
-# ADS Binary Protocol Specification - Log4TC v1
+# ADS Binary Protocol Specification for log4TC
 
-**Document Version**: 1.0  
-**Protocol Version**: 1  
-**Last Updated**: March 31, 2026
+## 1. Overview
+
+This document describes the binary protocol used for transmission of log entries from TwinCAT PLCs to the log4TC receiver service via ADS (Automation Device Specification).
+
+### Purpose
+The protocol enables efficient serialization of structured log messages with metadata, context, and typed arguments from PLC programs to a network service for centralized logging and analysis.
+
+### Version
+Current protocol version: **1** (single byte header)
+
+### Transport Layer
+- **Protocol**: ADS (Automation Device Specification) with WRITE operations
+- **Port**: `16150` (hardcoded in service)
+- **Index Group**: `1` (hardcoded)
+- **Index Offset**: `1` (hardcoded)
+- **Connection**: AMS Net ID based communication from PLC to service
 
 ---
 
-## Overview
+## 2. ADS Communication Layer
 
-The ADS (Automation Device Specification) binary protocol is a proprietary protocol developed by Beckhoff for communication between TwinCAT automation controllers and external services. Log4TC uses ADS as its legacy protocol for receiving log entries directly from TwinCAT PLCs.
+### AMS Net ID
+The PLC sends ADS messages with its own AMS Net ID (stored as `T_AmsNetID` string, format: "192.168.1.1.1.1" for 6 bytes).
 
-**Key Characteristics**:
-- **Type**: Binary, little-endian encoded
-- **Transport**: TCP/IP
-- **Default Port**: 16150
-- **Server Name**: "Log4Tc" (AMS registration)
-- **Status**: Maintained for backward compatibility; OTEL is the recommended new protocol
+### Port Details
+- ADS port `16150` is registered in the service on startup via `AdsServer(port=16150, name="Log4Tc")`
+- The .NET ADS server library (`TwinCAT.Ads.Server`) handles incoming WRITE operations on this port
 
----
-
-## Connection Model
-
-### TCP Server Architecture
-
-```
-TwinCAT PLC
-    ↓ (TCP connection to port 16150)
-    ↓
-Log4TC ADS Listener (async TCP server)
-    ├─ Binds to: 127.0.0.1:16150 (configurable host:port)
-    ├─ Accepts: Multiple concurrent connections
-    ├─ Per-connection handler: Async task processing ADS frames
-    └─ Response: ACK on success, NAK on failure
-```
+### Write Operations
+ADS WRITE operations deliver log message payloads:
+- **WRITE**: Request contains log message buffer(s)
+- **SRCADDR**: Pointer to buffer start (PLC side)
+- **LEN**: Number of bytes in payload (variable, up to 8KB per task)
+- **Response**: `AdsErrorCode.NoError` on success; error code on failure
 
 ### Connection Lifecycle
 
-1. **Connect**: TwinCAT initiates TCP connection to listener
-2. **Send Message**: TwinCAT sends binary ADS log entry
-3. **Parse**: Log4TC parses binary protocol
-4. **Respond**: Send ACK (success) or NAK (error)
-5. **Disconnect**: Either side can close connection
+1. **Initialization** (PLC side):
+   - Each task creates `FB_Log4TcTask` instance with dual buffers (8KB each)
+   - `FB_Log4TcTask.Init(sAmsNetId)` configures the AMS Net ID
+   - Service listens on port 16150
 
-**Connection Timeout**: 300 seconds (configurable)  
-**Max Concurrent Connections**: 100 (configurable via semaphore)
+2. **Steady State**:
+   - Log entries written to active write buffer (no persistent connection needed)
+   - When buffer has data, `FB_Log4TcTask.Call()` triggers ADS WRITE
+   - Service receives message via `OnWriteAsync()` handler
+   - Buffer is swapped for dual-buffering pattern
 
----
+3. **Error Handling**:
+   - ADS errors trigger retry with 5-second wait (TON timer)
+   - Service logs errors and continues
+   - No graceful shutdown; connection-less design
 
-## Binary Protocol Format
-
-### Frame Structure (Top-Level)
-
-```
-TwinCAT AMS Frame
-│
-├─ AMS Header (AMS protocol, not detailed here)
-│  └─ Source NetId, Source Port
-│  └─ Target NetId, Target Port
-│  └─ Command ID, State Flags, Data Length
-│
-└─ AMS Data (Log Entry Payload)
-   └─ [Binary Log Entry - see below]
-```
-
-### Message Structure (Little-Endian)
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ Offset │ Length │ Type    │ Field                       │
-├─────────────────────────────────────────────────────────┤
-│ 0      │ 1      │ uint8   │ Protocol Version (0x01)     │
-│ 1      │ *      │ string  │ Message (format template)   │
-│ +      │ *      │ string  │ Logger Name                 │
-│ +      │ 1      │ uint8   │ Log Level (0-5)             │
-│ +      │ 8      │ filetime│ PLC Timestamp               │
-│ +      │ 8      │ filetime│ Clock Timestamp (wallclock) │
-│ +      │ 4      │ int32   │ Task Index (PID)            │
-│ +      │ *      │ string  │ Task Name                   │
-│ +      │ 4      │ uint32  │ Task Cycle Counter          │
-│ +      │ *      │ string  │ Application Name            │
-│ +      │ *      │ string  │ Project Name                │
-│ +      │ 4      │ uint32  │ Online Change Count         │
-│ +      │ *      │ args[]  │ Arguments (type-value pairs)│
-│ +      │ *      │ ctxt[]  │ Context Variables (scope, name, value) │
-│ +      │ 1      │ uint8   │ End Marker (0x00)           │
-└─────────────────────────────────────────────────────────┘
-
-* = variable length, determined by 2-byte length prefix
-+ = offset depends on variable-length fields before it
-```
+### Hostname Resolution
+After receiving a message, the service calls `AdsHostnameService.GetHostname(target.NetId)` to resolve the sender's hostname from the AMS Net ID.
 
 ---
 
-## Field Specifications
+## 3. Binary Message Format
 
-### 1. Protocol Version (1 byte)
-
-```
-Offset: 0
-Length: 1 byte
-Type:   uint8
-Value:  0x01 (version 1)
-
-Current supported versions:
-  0x01 = Log4TC v0.2.3+ (current)
-  Other values result in ParseError::InvalidVersion
-```
-
-### 2. Message (Variable Length String)
+### Overall Structure
+Each ADS WRITE payload can contain **one or more log entries** serialized consecutively in a single buffer. The service reads entries sequentially until EOF.
 
 ```
-Format: [Length (2 bytes)] + [Data (UTF-8 bytes)]
-
-Length Encoding:
-  - First 2 bytes: uint16 (little-endian) = length in bytes
-  - Valid range: 0 to 65,535 bytes
-  - Security limit: 65,536 bytes (64 KB)
-
-Example:
-  Content: "Motor speed: {0} RPM"
-  Encoded: 0x14 0x00 "Motor speed: {0} RPM"
-           └─ 0x0014 = 20 bytes
-           
-Content: Template string with positional placeholders {0}, {1}, etc.
-Encoding: UTF-8 without BOM
+Byte Layout (hex):
+[Entry1 Version] [Entry1 Data...] [Entry1 Terminator]
+[Entry2 Version] [Entry2 Data...] [Entry2 Terminator]
+[Entry3 Version] [Entry3 Data...] [Entry3 Terminator]
+...
+(repeat until EOF)
 ```
 
-### 3. Logger (Variable Length String)
-
+### Message Structure (Pseudo-Code)
 ```
-Format: Same as Message field
+Payload {
+  while position < length {
+    LogEntryV1 entry = ReadLogEntry();
+  }
+}
 
-Content: Logger name identifying source component
-Example: "Hardware.Motors.SpeedController"
-Limit: 65,536 bytes (security limit)
-```
-
-### 4. Log Level (1 byte)
-
-```
-Offset: Message_length + Logger_length + 2
-Length: 1 byte
-Type:   uint8
-
-Mapping:
-  0 = Trace   → OTEL SeverityNumber 1 (TRACE)
-  1 = Debug   → OTEL SeverityNumber 5 (DEBUG)
-  2 = Info    → OTEL SeverityNumber 9 (INFO)
-  3 = Warn    → OTEL SeverityNumber 13 (WARN)
-  4 = Error   → OTEL SeverityNumber 17 (ERROR)
-  5 = Fatal   → OTEL SeverityNumber 21 (FATAL)
-  Other values → ParseError
-
-Example:
-  0x02 = Info level
-```
-
-### 5. PLC Timestamp (8 bytes)
-
-```
-Format: FILETIME (Windows 64-bit timestamp)
-
-Encoding:
-  - 8 bytes (little-endian uint64)
-  - 100-nanosecond intervals since 1601-01-01T00:00:00Z
-  - Range: 1601-01-01 to ~2262
-
-Conversion to Unix Epoch:
-  1. Read 8 bytes as uint64 (little-endian)
-  2. Subtract FILETIME_EPOCH_DIFF = 116,444,736,000,000,000
-  3. Divide by 10,000,000 to get seconds
-  4. Remainder × 100 = nanoseconds
-
-Example:
-  FILETIME: 0x01D5C3A8 0x2B8E3200 (arbitrary)
-  → Unix timestamp: [computed from formula above]
+LogEntryV1 {
+  BYTE version = 1;
+  String message;
+  String logger;
+  LogLevel level;       // UINT16
+  DateTime plcTimestamp; // FILETIME (LINT)
+  DateTime clockTimestamp; // FILETIME (LINT)
+  DINT taskIndex;
+  String taskName;
+  UDINT taskCycleCounter;
+  String appName;
+  String projectName;
+  UDINT onlineChangeCount;
   
-Security:
-  - Timestamps before Unix epoch (1970-01-01) are rejected
-  - Nanoseconds validated in range [0, 999,999,999]
+  while (true) {
+    BYTE type = read();
+    switch (type) {
+      case 1: // Argument
+        BYTE argIndex;
+        Object argValue;
+        break;
+      case 2: // Context
+        BYTE scope;
+        String ctxName;
+        Object ctxValue;
+        break;
+      case 255: // End
+        break out of loop;
+    }
+  }
+}
 ```
 
-### 6. Clock Timestamp (8 bytes)
+### Payload Size Limits
+- **Per-Buffer**: 8192 bytes (`Config.nBufferLen`)
+- **Per-Entry**: Variable, depends on message, logger, arguments, and context
+- **Timeout**: None (fire-and-forget; retries after 5 seconds on error)
+
+---
+
+## 4. Object Type System
+
+The protocol defines 17 data types that can be serialized in arguments and context values. Each type is identified by a signed 16-bit integer.
+
+### Type ID Reference Table
+
+| Type ID | Type Name | Size (bytes) | C# Type | Encoding Notes |
+|---------|-----------|--------------|---------|-----------------|
+| 0 | NULL | 0 | null | No data follows |
+| 1 | BYTE | 1 | byte | Unsigned 8-bit integer |
+| 2 | WORD | 2 | ushort | Unsigned 16-bit integer, little-endian |
+| 3 | DWORD | 4 | uint | Unsigned 32-bit integer, little-endian |
+| 4 | REAL | 4 | float | IEEE 754 single-precision, little-endian |
+| 5 | LREAL | 8 | double | IEEE 754 double-precision, little-endian |
+| 6 | SINT | 1 | sbyte | Signed 8-bit integer |
+| 7 | INT | 2 | short | Signed 16-bit integer, little-endian |
+| 8 | DINT | 4 | int | Signed 32-bit integer, little-endian |
+| 9 | USINT | 1 | byte | Unsigned 8-bit integer |
+| 10 | UINT | 2 | ushort | Unsigned 16-bit integer, little-endian |
+| 11 | UDINT | 4 | uint | Unsigned 32-bit integer, little-endian |
+| 12 | STRING | variable | string | Length-prefixed (see String Encoding) |
+| 13 | BOOL | 1 | bool | 0x00 = false, 0x01 = true |
+| 15 | ULARGE | 8 | ulong | Unsigned 64-bit integer, little-endian |
+| 17 | LARGE | 8 | long | Signed 64-bit integer, little-endian |
+| 20000 | TIME | 4 | TimeSpan | Milliseconds as UDINT, custom type |
+| 20001 | LTIME | 8 | TimeSpan | 100-nanosecond units as ULINT, custom type |
+| 20002 | DATE | 4 | DateTimeOffset | Unix seconds as UDINT, custom type |
+| 20003 | DATE_AND_TIME | 4 | DateTimeOffset | Unix seconds as UDINT, custom type |
+| 20004 | TIME_OF_DAY | 4 | TimeSpan | Milliseconds as UDINT, custom type |
+| 20005 | ENUM | 1-8 | object | Recursive: type header + integer value |
+| 20006 | WSTRING | variable | string | Wide string (UTF-16), length-prefixed |
+
+---
+
+## 5. Data Type Encoding
+
+### Strings (Type 12, Standard STRING)
+
+**Length-Prefixed, CP1252 Encoded**
 
 ```
-Format: FILETIME (same as PLC Timestamp)
-
-Content: Wall-clock time when log entry was recorded
-Note: May differ from PLC timestamp due to clock synchronization
-Purpose: Establish received time for latency analysis
+Byte Layout:
+[Length: BYTE] [Data: N bytes]
+  1 byte          up to 255 bytes
 ```
 
-### 7. Task Index (4 bytes)
+- **Length**: Single unsigned byte (0-255) indicating the number of **bytes** that follow
+- **Encoding**: Windows Code Page 1252 (Latin-1)
+- **Max Length**: 255 bytes
+- **Null Terminator**: Not included in length or serialization; null-terminated in memory on PLC side (`T_MaxString`)
 
+**Example**: String "Log" in CP1252
 ```
-Length: 4 bytes
-Type:   int32 (little-endian)
-Range:  -2,147,483,648 to 2,147,483,647
-
-Content: Task ID or process ID on the PLC
-Example: 1 (main task), 2 (secondary task), etc.
-
-In OTEL: Maps to process.pid attribute
+03 4C 6F 67
+└─ Length (3 bytes) │ 'L'(0x4C) 'o'(0x6F) 'g'(0x67)
 ```
 
-### 8. Task Name (Variable Length String)
+### Wide Strings (Type 20006, WSTRING)
+
+**Length-Prefixed, UTF-16LE Encoded**
 
 ```
-Format: [Length (2 bytes)] + [Data (UTF-8 bytes)]
-
-Content: Human-readable task name
-Example: "MainTask", "EventHandler", "DataLogger"
-Limit: 65,536 bytes (security limit)
-
-In OTEL: Maps to process.command_line attribute
+Byte Layout:
+[Length: BYTE] [Data: N*2 bytes]
+  1 byte          up to 510 bytes (255 chars)
 ```
 
-### 9. Task Cycle Counter (4 bytes)
+- **Length**: Single unsigned byte (0-255) indicating the number of **characters** (not bytes)
+- **Encoding**: UTF-16 Little-Endian (Windows wide-char format)
+- **Bytes per Char**: 2
+- **Max Length**: 255 characters (510 bytes)
 
+**Example**: WSTRING "Hi" in UTF-16LE
 ```
-Length: 4 bytes
-Type:   uint32 (little-endian)
-Range:  0 to 4,294,967,295
-
-Content: Cycle number within the task (monotonically increasing)
-Purpose: Track execution frequency and detect gaps
-Example: 1000, 2000, 3000... (incremented per task cycle)
-
-In OTEL: Maps to task.cycle attribute
+02 48 00 69 00
+└─ Length (2 chars) │ 'H'(0x48,0x00) 'i'(0x69,0x00)
 ```
 
-### 10. Application Name (Variable Length String)
+### Timestamps (Windows FILETIME)
+
+All datetime values are encoded as **Windows FILETIME** format (64-bit signed integers, little-endian).
+
+**FILETIME Format**:
+- **Unit**: 100-nanosecond intervals
+- **Epoch**: January 1, 1601 (Windows NT epoch)
+- **Conversion**: `DateTime.FromFileTime(int64_value)`
 
 ```
-Format: [Length (2 bytes)] + [Data (UTF-8 bytes)]
-
-Content: Name of the TwinCAT application
-Example: "MotorController", "DataAcquisition"
-Limit: 65,536 bytes (security limit)
-
-In OTEL: Maps to service.instance.id attribute
+Byte Layout:
+[Value: LINT (8 bytes, little-endian)]
 ```
 
-### 11. Project Name (Variable Length String)
-
+**Example**: January 1, 2000, 00:00:00 UTC
 ```
-Format: [Length (2 bytes)] + [Data (UTF-8 bytes)]
-
-Content: Name of the TwinCAT project
-Example: "AutomationProject2024"
-Limit: 65,536 bytes (security limit)
-
-In OTEL: Maps to service.name attribute
+- FILETIME value: 0x01BF4D0E4300D400 (125,911,584,000,000,000 in decimal)
+- Bytes (little-endian): 00 D4 00 43 0E 4D BF 01
 ```
 
-### 12. Online Change Count (4 bytes)
+On read, if the value is invalid or out of range, fallback to `DateTime(0)` (January 1, 0001).
+
+### Integers
+
+All multi-byte integers use **little-endian** byte order (x86/x64 standard).
+
+| Type | Bytes | Signed | Example |
+|------|-------|--------|---------|
+| BYTE, USINT | 1 | No | 0xFF |
+| SINT | 1 | Yes | 0x80 = -128 |
+| WORD, UINT | 2 | No | 0xAB 0xCD → 0xCDAB |
+| INT | 2 | Yes | 0xFF 0xFF = -1 |
+| DWORD, UDINT | 4 | No | 0x01 0x02 0x03 0x04 → 0x04030201 |
+| DINT | 4 | Yes | 0xFF 0xFF 0xFF 0xFF = -1 |
+| ULARGE | 8 | No | 8 bytes, little-endian |
+| LARGE | 8 | Yes | 8 bytes, little-endian |
+
+### Floats
+
+- **REAL (Type 4)**: IEEE 754 single-precision (4 bytes), little-endian
+- **LREAL (Type 5)**: IEEE 754 double-precision (8 bytes), little-endian
+
+### Enumerations (Type 20005)
+
+Enums are serialized as a **recursive object**: the type header is followed by the underlying integer type and value.
 
 ```
-Length: 4 bytes
-Type:   uint32 (little-endian)
-Range:  0 to 4,294,967,295
-
-Content: Count of online changes (downloads/modifications) to the program
-Purpose: Detect program redeployment events
-Example: 0 (initial), 1 (after first download), 2 (after second download)
-
-In OTEL: Maps to online.changes attribute
+Byte Layout:
+[Type ID: INT16 = 20005] [Underlying Type: INT16] [Value: variable]
 ```
 
-### 13. Arguments and Context Section (Variable)
-
+**Example**: Enum with DWORD value 3
 ```
-Repeated structure until Type = 0:
-
-┌─────────────────────────────────────────┐
-│ Type Byte (1 byte)                      │
-├─────────────────────────────────────────┤
-│  0x00 = End marker (no more args/ctx)   │
-│  0x01 = Argument                        │
-│  0x02 = Context Variable                │
-│  Other = ParseError                     │
-└─────────────────────────────────────────┘
-
-────────────────────────────────────────────
-
-ARGUMENTS (Type = 0x01):
-
-  ┌────────────────────────────────────────┐
-  │ Type: 0x01 (1 byte)                    │
-  │ Index: uint8 (1 byte) - position 0..31 │
-  │ Value: Type-tagged value (variable)    │
-  └────────────────────────────────────────┘
-
-  Security Limit: 32 arguments maximum per message
-
-────────────────────────────────────────────
-
-CONTEXT VARIABLES (Type = 0x02):
-
-  ┌────────────────────────────────────────┐
-  │ Type: 0x02 (1 byte)                    │
-  │ Scope: uint8 (1 byte) - context scope  │
-  │ Name: String (variable) - variable name│
-  │ Value: Type-tagged value (variable)    │
-  └────────────────────────────────────────┘
-
-  Security Limit: 64 context variables maximum per message
+E1 4E 03 00 00 00 00
+└──────────┘ └──────────────────┘ └───────────────┘
+Type 20005     Type 3 (DWORD)     Value 3 (4 bytes)
 ```
 
-### 14. Type-Tagged Values
+Supported underlying types for enums: BYTE, WORD, DWORD, LWORD (1, 2, 4, or 8 bytes).
 
-Values in arguments and context use a type-tag prefix:
+---
+
+## 6. LogEntry Structure
+
+The core payload structure is `LogEntryV1`, serialized in the order listed below.
+
+### Field Layout and Serialization Order
+
+| Offset | Field | Type | Size | Encoding | Description |
+|--------|-------|------|------|----------|-------------|
+| 0 | `version` | BYTE | 1 | Value = 1 | Protocol version identifier |
+| 1 | `message` | String | var | CP1252, length-prefixed | Message template (may include placeholders like `{0}`, `{1}`) |
+| 1+len_m | `logger` | String | var | CP1252, length-prefixed | Logger name or "_GLOBAL_" |
+| ... | `level` | UINT16 | 2 | Little-endian | Log level (0-5, see below) |
+| ... | `plcTimestamp` | FILETIME | 8 | Little-endian, signed | PLC system timestamp at log time |
+| ... | `clockTimestamp` | FILETIME | 8 | Little-endian, signed | Real-time clock timestamp |
+| ... | `taskIndex` | DINT | 4 | Little-endian, signed | Task index from `GETCURTASKINDEXEX()` |
+| ... | `taskName` | String | var | CP1252, length-prefixed | Task name from system info |
+| ... | `taskCycleCounter` | UDINT | 4 | Little-endian | Cycle count from task info |
+| ... | `appName` | String | var | CP1252, length-prefixed | Application name from system info |
+| ... | `projectName` | String | var | CP1252, length-prefixed | Project name from system info |
+| ... | `onlineChangeCount` | UDINT | 4 | Little-endian | Online change counter |
+| ... | `extras` | Variable | var | See section 6.2 | Arguments and context entries |
+
+### Log Level Enumeration
+
+Log levels are serialized as UINT16 values:
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 0 | Trace | Lowest priority; detailed diagnostic |
+| 1 | Debug | Development-level detail |
+| 2 | Info | General informational messages |
+| 3 | Warn | Warning condition; software continues |
+| 4 | Error | Error condition; software impaired |
+| 5 | Fatal | Highest priority; severe failure |
+
+### Extras: Arguments and Context (Variable-Length Section)
+
+After the fixed fields, the entry contains zero or more **extra entries** followed by a terminator:
+
+**Type 1: Argument**
+```
+[Type Byte = 1] [Arg Index: BYTE] [Object: 2+ bytes]
+```
+- **Type Byte**: 0x01
+- **Arg Index**: Positional index for message template replacement (1-based)
+- **Object**: Full object encoding (see section 5 for object format)
+
+**Type 2: Context**
+```
+[Type Byte = 2] [Scope: BYTE] [Context Name: String] [Object: 2+ bytes]
+```
+- **Type Byte**: 0x02
+- **Scope**: E_Scope enum (0=eLog, 1=eLogger, 2=eScoped, 3=eTask)
+- **Context Name**: Key name, CP1252 string
+- **Object**: Full object encoding
+
+**Terminator**
+```
+[Type Byte = 255]
+```
+- **Type Byte**: 0xFF marks the end of an entry
+
+### Full Object Encoding
+
+Objects (arguments and context values) are encoded as:
 
 ```
-┌──────────────────────────────────────────┐
-│ Type Byte (1 byte)                       │
-├──────────────────────────────────────────┤
-│ 0x00 = Null                              │
-│ 0x01 = Integer (int32, 4 bytes)          │
-│ 0x02 = Float (f64, 8 bytes)              │
-│ 0x03 = String (variable length)          │
-│ 0x04 = Boolean (1 byte, 0=false/1=true) │
-│ Other = ParseError                       │
-└──────────────────────────────────────────┘
-
-Examples:
-
-Null:     0x00
-Integer:  0x01 0x2A 0x00 0x00 0x00  (value = 42)
-Float:    0x02 0x00 0x00 0x00 0x00 0x00 0x00 0xF0 0x3F  (value = 1.0)
-String:   0x03 0x05 0x00 "hello"  (5 bytes of "hello")
-Boolean:  0x04 0x01  (true)
-Boolean:  0x04 0x00  (false)
+[Type ID: INT16] [Data: variable]
+  2 bytes
 ```
 
-### 15. End Marker (1 byte)
+- **Type ID**: Signed 16-bit little-endian integer from section 4
+- **Data**: Type-specific serialization (size and format depend on Type ID)
 
+**Example: DWORD Argument**
 ```
-Length: 1 byte
-Value:  0x00
-
-Purpose: Signals end of arguments and context section
-Required: Must be present after all args/context
+01 01 03 00 00 00 42 00 00 00
+│  │  │  └────────────────────┤
+│  │  └──── Type ID = 3 (DWORD)
+│  └─────── Arg Index = 1
+└──────── Type Byte = 1 (Argument)
 ```
 
 ---
 
-## Complete Message Example
+## 7. Buffer Management
 
-### Raw Binary (Hex Dump)
+### Dual-Buffer Pattern (PLC Side)
 
-```
-01              # Version = 1
-06 00           # Message length = 6 bytes
-48 69 21 00 00 00  # "Hi!!!" (actually 5 bytes, but let's say "Hi!!!")
-05 00           # Actually "Hi!!!" is 5 bytes
-48 69 21 21 21  # "Hi!!!"
-04 00           # Logger length = 4 bytes
-4C 6F 67        # "Log"
-02              # Log Level = Info
+The `FB_Log4TcTask` function block implements a double-buffering scheme to avoid blocking log writes during transmission.
 
-00 00 00 00     # PLC Timestamp (8 bytes - example value)
-00 00 00 00
-00 00 00 00
+**Buffer Components** (per task):
+- `fbLogBuffer1`: 8192-byte array (from `Config.nBufferLen`)
+- `fbLogBuffer2`: 8192-byte array
+- `nWriteBuffer`: UINT (1 or 2), indicates which buffer is currently active for writes
 
-00 00 00 00     # Clock Timestamp (8 bytes - same example)
-00 00 00 00
+**Workflow**:
 
-01 00 00 00     # Task Index = 1 (little-endian int32)
+1. **Write Phase**: Logs are written to the active write buffer
+   - `WriteBuffer` property returns pointer to `fbLogBuffer1` or `fbLogBuffer2` based on `nWriteBuffer`
+   - Data is appended via `FB_LogEntry.Start()`, `AddAnyArg()`, `AddContext()`, `End()`
+   - Writing increments internal byte counter `nBufferCount`
 
-09 00           # Task Name length = 9 bytes
-4D 61 69 6E 54 61 73 6B  # "MainTask"
+2. **Transmission Phase** (triggered by `FB_Log4TcTask.Call()`):
+   ```
+   State 10: Wait for log entry; add them to send buffer
+     IF WriteBuffer.BufferUsed > 0 THEN
+       nWriteBuffer := SEL(nWriteBuffer = 1, 1, 2)  // Toggle buffer
+       ADS WRITE with current WriteBuffer data
+       → State 20
+   
+   State 20: Wait for ADS response
+     IF ADS done AND NO error THEN
+       _ReadBuffer.Clear()  // Clear the buffer that was just sent
+       → State 10
+     ELSE IF error THEN
+       → State 30 (retry)
+   
+   State 30: Retry wait (5 seconds)
+     IF timeout THEN
+       Resend same data
+       → State 20
+   ```
 
-64 00 00 00     # Task Cycle Counter = 100 (little-endian uint32)
+3. **Buffer Swap**: After successful transmission, the non-write buffer (which now contains the sent data) is cleared. The next call to `FB_Log4TcTask.Call()` toggles which buffer is active for new writes.
 
-04 00           # App Name length = 4 bytes
-41 70 70        # "App"
+### Implications for Rust Implementation
 
-07 00           # Project Name length = 7 bytes
-50 72 6F 6A 65 63 74  # "Project"
-
-00 00 00 00     # Online Change Count = 0
-
-01              # Argument type
-00              # Index = 0
-01              # Value type = Integer
-2A 00 00 00     # Integer value = 42
-
-00              # End marker - no more args/context
-```
-
----
-
-## Security Constraints
-
-### Parsing Limits
-
-```
-┌─────────────────────────┬───────────────┬─────────────────┐
-│ Field                   │ Limit         │ Rationale       │
-├─────────────────────────┼───────────────┼─────────────────┤
-│ String field (any)      │ 65,536 bytes  │ Prevent alloc   │
-│ Message payload length  │ 1 MB total    │ DoS protection  │
-│ Arguments per message   │ 32 max        │ Prevent abuse   │
-│ Context variables       │ 64 max        │ Prevent abuse   │
-│ Concurrent connections  │ 100 max       │ Resource limit  │
-│ Connection timeout      │ 300 seconds   │ Slowloris mitiga│
-└─────────────────────────┴───────────────┴─────────────────┘
-```
-
-### Validation Rules
-
-1. **Message Size**: Total payload ≤ 1 MB
-2. **String Length**: Each string ≤ 65 KB
-3. **UTF-8 Validation**: All strings must be valid UTF-8
-4. **Timestamp Validation**: Must be ≥ 1970-01-01 (Unix epoch)
-5. **Argument Count**: ≤ 32 per message
-6. **Context Count**: ≤ 64 per message
-7. **Type Validation**: Type bytes must be 0, 1, 2, 3, or 4
-8. **Level Validation**: Log level must be 0-5
+- **No guaranteed delivery**: Timeouts and retries may be transient; implement idempotency handling
+- **In-order delivery per task**: One task sends one buffer at a time; order is preserved within a task
+- **Stateless on service side**: No session, connection pooling, or ack-with-sequence-number protocol
+- **Multiple tasks simultaneously**: Multiple PLC tasks can write concurrently; the service receives from all AMS Net IDs on port 16150
 
 ---
 
-## Error Responses
+## 8. Example Payloads
 
-### ACK (Success)
+### Example 1: Simple Log Entry (No Arguments)
+
+**Scenario**: Task 1 logs `"System started"` at Info level
+
+**Hex Dump**:
+```
+01                     // Version = 1
+0E 53 79 73 74 65 6D 20 73 74 61 72 74 65 64  // "System started" (14 bytes)
+07 5F 47 4C 4F 42 41 4C 5F  // "_GLOBAL_" (9 bytes)
+02 00                  // Level = 2 (Info)
+00 D4 00 43 0E 4D BF 01  // plcTimestamp (FILETIME for 2000-01-01)
+00 D4 00 43 0E 4D BF 01  // clockTimestamp (same)
+05 00 00 00            // taskIndex = 5 (DINT)
+04 54 41 53 4B         // taskName = "TASK" (4 bytes)
+00 00 00 00            // taskCycleCounter = 0
+03 50 4C 43            // appName = "PLC" (3 bytes)
+07 50 72 6F 6A 65 63 74  // projectName = "Project" (7 bytes)
+01 00 00 00            // onlineChangeCount = 1
+FF                     // Terminator (end of entry)
+```
+
+**Explanation**:
+- No arguments (no type 1 entries)
+- No context (no type 2 entries)
+- Entry is 57 bytes total
+
+### Example 2: Log Entry with One Argument
+
+**Scenario**: Task 2 logs `"Temperature is {0}"` with value 42.5 (REAL) at Warn level
+
+**Hex Dump**:
+```
+01                          // Version = 1
+13 54 65 6D 70 65 72 61 74 75 72 65 20 69 73 20 7B 30 7D  // "Temperature is {0}" (19 bytes)
+0C 4C 6F 67 67 65 72 31   // "Logger1" (7 bytes)
+03 00                      // Level = 3 (Warn)
+00 D4 00 43 0E 4D BF 01   // plcTimestamp
+00 D4 00 43 0E 4D BF 01   // clockTimestamp
+02 00 00 00               // taskIndex = 2
+04 54 41 53 4B           // taskName = "TASK" (4 bytes)
+01 00 00 00              // taskCycleCounter = 1
+03 50 4C 43             // appName = "PLC"
+07 50 72 6F 6A 65 63 74 // projectName = "Project"
+02 00 00 00             // onlineChangeCount = 2
+01                       // Type = 1 (Argument)
+01                       // Arg Index = 1
+04 00                    // Object Type = 4 (REAL)
+00 00 2A 42             // Value = 42.5 (IEEE 754 float, little-endian)
+FF                       // Terminator
+```
+
+**Explanation**:
+- Single argument with index 1, type REAL, value 42.5
+- Entry is ~62 bytes
+
+### Example 3: Log Entry with Context
+
+**Scenario**: Task 3 logs `"Request received"` with context key "request_id" = "REQ001" (STRING)
+
+**Hex Dump**:
+```
+01                       // Version = 1
+10 52 65 71 75 65 73 74 20 72 65 63 65 69 76 65 64  // "Request received" (16 bytes)
+07 5F 47 4C 4F 42 41 4C 5F  // "_GLOBAL_"
+02 00                    // Level = 2 (Info)
+00 D4 00 43 0E 4D BF 01 // plcTimestamp
+00 D4 00 43 0E 4D BF 01 // clockTimestamp
+03 00 00 00             // taskIndex = 3
+04 54 41 53 4B         // taskName = "TASK"
+00 00 00 00            // taskCycleCounter = 0
+03 50 4C 43           // appName = "PLC"
+07 50 72 6F 6A 65 63 74 // projectName = "Project"
+00 00 00 00           // onlineChangeCount = 0
+02                     // Type = 2 (Context)
+00                     // Scope = 0 (eLog)
+0A 72 65 71 75 65 73 74 5F 69 64  // "request_id" (10 bytes)
+0C 00                  // Object Type = 12 (STRING)
+06 52 45 51 30 30 31  // "REQ001" (6 bytes)
+FF                     // Terminator
+```
+
+**Explanation**:
+- One context entry with scope eLog, key "request_id", value "REQ001"
+- Entry is ~73 bytes
+
+### Example 4: Multiple Entries in One Payload
+
+A single ADS WRITE can contain multiple entries:
 
 ```
-Response: Single byte
-Value:    0x01 (ACK)
-Semantics: Message parsed and queued successfully
+[Entry 1: 57 bytes] + [Entry 2: 62 bytes] + [Entry 3: 73 bytes] = 192 bytes total
 ```
 
-### NAK (Failure)
-
-```
-Response: Error code (variable format)
-Examples:
-  - Protocol version mismatch
-  - Incomplete message (not enough bytes)
-  - Invalid field values
-  - Security limit exceeded (string too long, too many args, etc.)
-  - UTF-8 decoding error
-  - FILETIME conversion failure
-
-Error Propagation:
-  ADS Parser Error → ADS Error Type → NAK to client
-```
+The service reads sequentially with a while loop until `stream.Position >= stream.Length`.
 
 ---
 
-## Performance Characteristics
+## 9. Error Handling
 
-### Typical Message Sizes
+### Buffer Overflow
 
-```
-Minimal message (no arguments):
-  Version (1) + Message (2+5) + Logger (2+3) + Level (1)
-  + PLC Time (8) + Clock Time (8) + Task Index (4) + Task Name (2+8)
-  + Cycle (4) + App (2+3) + Project (2+3) + Online (4) + End (1)
-  = ~60 bytes
+**PLC Side**:
+- `FB_LogEntry._Copy()` checks if `nBufferRemaining >= nCount` before writing
+- If insufficient space: sets `bError := TRUE` and logs a warn message via `F_InternalLog()`
+- `FB_LogEntry.End()` returns FALSE if error occurred
+- Caller should check return value; corrupted entries are not transmitted
 
-Typical message (2 arguments):
-  Minimal + 2 args (1 + 1 + 4) = ~75 bytes
-  
-Maximum message (32 args, 64 context):
-  Base + 32 × (1 + 1 + 4) + 64 × (1 + 1 + 2+15 + 4)
-  ≈ 1.2 KB (assuming average 15-byte names, simple values)
-```
+**Service Side**:
+- No explicit overflow check; assumes PLC side handles it
+- If payload is malformed, parsing exception is caught and logged as error
+- The entry is discarded; processing continues with next entry if available
 
-### Throughput
+### ADS Timeout / Connection Loss
 
-```
-At 10,000 msgs/sec with 75 bytes/msg:
-  750 KB/sec bandwidth
-  10k connections/sec potential load
-  ~100ms accumulated latency acceptable
-```
+**PLC Side**:
+- ADS WRITE operation has built-in timeout (handled by TwinCAT runtime)
+- If timeout or error (e.g., service not listening):
+  - `fbAdsWriteMsg.ERR` is set to TRUE
+  - `fbAdsWriteMsg.ERRID` contains error code
+  - State machine enters state 30 (retry) after 5-second wait
+  - Same buffer data is retried (no max retries; indefinite)
+
+**Service Side**:
+- If service crashes or port closes: PLC will timeout and retry
+- When service restarts: new connections are accepted
+- No sequence numbers; replayed messages appear as duplicates
+
+### Encoding Errors
+
+**String Encoding**:
+- If string > 255 bytes on PLC side: logged as error, entry marked corrupted
+- Service registers CP1252 encoding provider on startup; should always decode
+
+**Timestamp Parsing**:
+- Service catches `ArgumentException` when FILETIME is out of valid range
+- Fallback: uses `DateTime(0)` (January 1, 0001)
+- No error logged; processing continues
+
+**Unknown Object Types**:
+- Service throws `NotImplementedException($"type {type}")` if type ID not in supported list
+- Exception is caught in outer handler; entry logged as error, discarded
+
+### Partial Entry at Buffer Boundary
+
+**Not Possible**: Entries do not span multiple ADS WRITE operations; each ADS message contains complete entries (or none if buffer was not full).
 
 ---
 
-## Protocol Evolution
+## 10. Implementation Notes for Rust
 
-### Version 1 (Current)
+### Parsing Strategy
 
-- 16 distinct data element types
-- Type-tagged value system
-- FILETIME timestamps
-- UTF-8 string encoding
-- Argument and context indexing
+**Recommended Approach**: Streaming binary parser using a crate like `nom` or `winnow` for robustness.
 
-### Future Versions
-
-Planned enhancements (not yet implemented):
-- Compression support (gzip, zstd)
-- Structured argument nesting
-- Binary encoding for large strings
-- Batching multiple entries per frame
-- Streaming large values
-
----
-
-## Reference Implementation
-
-The canonical Rust implementation is in `crates/log4tc-ads/`:
-
-- **parser.rs**: Complete binary protocol parser with security limits
-- **listener.rs**: TCP server with connection management
-- **protocol.rs**: Type definitions and constants
-- **error.rs**: Error types and diagnostics
-
-Key parsing code:
 ```rust
-pub fn parse(data: &[u8]) -> Result<AdsLogEntry> {
-    // Total message size check
-    if data.len() > MAX_MESSAGE_SIZE { ... }
+use std::io::Read;
+
+fn parse_payload(data: &[u8]) -> Vec<LogEntry> {
+    let mut entries = Vec::new();
+    let mut cursor = 0;
     
-    let mut reader = BytesReader::new(data);
+    while cursor < data.len() {
+        match parse_log_entry(&data[cursor..]) {
+            Ok((consumed, entry)) => {
+                entries.push(entry);
+                cursor += consumed;
+            }
+            Err(e) => {
+                error!("Parse error at offset {}: {}", cursor, e);
+                break;
+            }
+        }
+    }
     
-    // Parse each field in order with validation
-    let version = AdsProtocolVersion::from_u8(reader.read_u8()?)?;
-    let message = reader.read_string()?;  // Checks MAX_STRING_LENGTH
-    // ... etc ...
+    entries
+}
+
+struct LogEntry {
+    version: u8,
+    message: String,
+    logger: String,
+    level: LogLevel,
+    plc_timestamp: DateTime,
+    clock_timestamp: DateTime,
+    task_index: i32,
+    task_name: String,
+    task_cycle_counter: u32,
+    app_name: String,
+    project_name: String,
+    online_change_count: u32,
+    arguments: BTreeMap<u8, Object>,
+    context: BTreeMap<String, Object>,
+}
+```
+
+### Zero-Copy Strategies
+
+1. **String Slices**: Avoid copying string data by using byte slices and decoding on-demand
+   ```rust
+   // Instead of copying entire string:
+   let len = data[cursor] as usize;
+   cursor += 1;
+   let string_bytes = &data[cursor..cursor + len];
+   cursor += len;
+   // Decode only when needed:
+   let string = encoding_rs::WINDOWS_1252.decode(string_bytes).into_owned();
+   ```
+
+2. **Borrowed Timestamps**: Parse FILETIME directly without intermediate allocations
+   ```rust
+   fn parse_filetime(data: &[u8]) -> i64 {
+       i64::from_le_bytes([...]) // Direct byte interpretation
+   }
+   ```
+
+3. **Streaming Parser**: For large payloads, parse and emit entries one at a time without buffering entire payload
+
+### Encoding Support
+
+- **Windows-1252 (CP1252)**: Use `encoding_rs::WINDOWS_1252` crate
+- **UTF-16LE**: Standard Rust `String::from_utf16_le()`
+- **FILETIME**: Convert to `std::time::SystemTime` or equivalent
+
+```rust
+use chrono::DateTime;
+
+fn filetime_to_datetime(ft: i64) -> Option<DateTime<Utc>> {
+    const WINDOWS_TICK: i64 = 10_000_000;
+    const SEC_TO_UNIX_EPOCH: i64 = 11_644_473_600;
     
-    // Arguments and context with limits
-    loop {
-        let type_id = reader.read_u8()?;
-        if type_id == 0 { break; }
-        
-        if arguments.len() >= MAX_ARGUMENTS { ... }
-        // or
-        if context.len() >= MAX_CONTEXT_VARS { ... }
+    let secs = ft / WINDOWS_TICK - SEC_TO_UNIX_EPOCH;
+    DateTime::from_timestamp(secs, 0).ok()
+}
+```
+
+### Object Type Parsing
+
+Implement a recursive object parser for type-safe deserialization:
+
+```rust
+enum Object {
+    Null,
+    Byte(u8),
+    Word(u16),
+    DWord(u32),
+    Real(f32),
+    LReal(f64),
+    String(String),
+    Bool(bool),
+    Time(Duration),
+    DateTime(SystemTime),
+    Enum(Box<Object>), // Recursive
+    // ... other types
+}
+
+fn parse_object(data: &[u8], cursor: &mut usize) -> Result<Object, ParseError> {
+    let type_id = i16::from_le_bytes([data[*cursor], data[*cursor + 1]]);
+    *cursor += 2;
+    
+    match type_id {
+        0 => Ok(Object::Null),
+        1 => {
+            let val = data[*cursor];
+            *cursor += 1;
+            Ok(Object::Byte(val))
+        }
+        // ... handle all 17 types
+        20005 => {
+            // Enum: parse nested object
+            let inner = parse_object(data, cursor)?;
+            Ok(Object::Enum(Box::new(inner)))
+        }
+        _ => Err(ParseError::UnknownType(type_id)),
     }
 }
 ```
 
----
+### Error Handling
 
-## Testing
+- **Malformed Entries**: Log error, skip entry, continue with next
+- **Encoding Errors**: Log warning, use fallback (e.g., `<invalid UTF-8>`)
+- **Type Errors**: Use `?` operator or `match` for early exit per-message
 
-### Test Cases
+### Testing
 
-1. **Valid Messages**: All field types, various sizes
-2. **Invalid Versions**: Unsupported version bytes
-3. **Incomplete Messages**: Truncated payloads at various offsets
-4. **Oversized Strings**: Exceed 65 KB limit
-5. **Oversized Message**: Exceed 1 MB total
-6. **Invalid UTF-8**: Non-UTF-8 bytes in strings
-7. **Invalid Timestamps**: Before Unix epoch
-8. **Too Many Arguments**: Exceed 32 limit
-9. **Too Many Context Variables**: Exceed 64 limit
-10. **Connection Limits**: Test semaphore with 100 max connections
-11. **Timeout Handling**: Slow clients (Slowloris-like)
+- **Fuzz Testing**: Generate random payloads to find parser edge cases
+- **Known Good Payloads**: Use captured hex dumps from this spec as regression tests
+- **Roundtrip**: Encode and decode to verify symmetry (if implementing encoder)
 
-### Integration Tests
+### Performance Considerations
 
-- TwinCAT → ADS Listener → Parser → LogEntry conversion
-- Concurrent connections and message ordering
-- Backpressure on full channel
-- Graceful connection closure
+- **Buffer Size**: Expect up to 8KB per message; allocate accordingly
+- **Memory Pooling**: Reuse allocations across messages if processing high throughput
+- **Async I/O**: Use Tokio or async-std for non-blocking socket handling on port 16150
+- **Concurrency**: Each PLC task sends independently; use concurrent map for hostname cache
 
 ---
 
-## Migration Notes
+## 11. Appendix: State Machine Diagram
 
-### From ADS to OTEL
+### FB_Log4TcTask Call Sequence
 
-**ADS Advantages**:
-- Efficient binary protocol
-- Low latency
-- Compact payloads
-
-**OTEL Advantages**:
-- Open standard (not proprietary)
-- Multi-language support
-- Ecosystem tools and collectors
-- Better cloud integration
-- More fields and flexibility
-
-**Field Mapping** (see `docs/otel-mapping.md`):
 ```
-ADS Field → OTEL Attribute
-project_name → service.name
-app_name → service.instance.id
-hostname → host.name
-logger → logger.name
-message → log body
-level → severity_number
-arguments → attributes
-context → attributes
+┌─────────────┐
+│  State 0    │ (Initialization)
+│   (Init)    │
+└──────┬──────┘
+       │
+       ▼
+┌──────────────────────────────────────┐
+│  State 10                            │
+│  Wait for log entry in WriteBuffer   │
+│  IF WriteBuffer.BufferUsed > 0:      │
+│    Toggle nWriteBuffer               │
+│    Issue ADS WRITE                   │
+│    → State 20                        │
+│  ELSE:                               │
+│    Loop (wait for next entry)        │
+└──────────────────────────────────────┘
+       │
+       │ (Data sent)
+       ▼
+┌──────────────────────────────────────┐
+│  State 20                            │
+│  Wait for ADS response               │
+│  IF NOT fbAdsWriteMsg.BUSY:          │
+│    IF fbAdsWriteMsg.ERR:             │
+│      → State 30 (Retry)              │
+│    ELSE:                             │
+│      _ReadBuffer.Clear()             │
+│      → State 10                      │
+│  ELSE:                               │
+│    Loop (wait for response)          │
+└──────────────────────────────────────┘
+       │
+       │ (Error)
+       ▼
+┌──────────────────────────────────────┐
+│  State 30                            │
+│  Retry wait (5 seconds)              │
+│  IF fbRetryWait.Q:                   │
+│    fbAdsWriteMsg(WRITE:=TRUE)        │
+│    → State 20                        │
+│  ELSE:                               │
+│    Loop (wait for timeout)           │
+└──────────────────────────────────────┘
 ```
 
 ---
 
-**Document Status**: Complete  
-**Review Date**: March 31, 2026  
-**Next Review**: When protocol changes are planned
+## 12. References
+
+- **TwinCAT 3 Documentation**: Automation Device Specification (ADS)
+- **Windows FILETIME**: [Microsoft FILETIME structure](https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime)
+- **Code Pages**: [Windows-1252 (Latin-1)](https://en.wikipedia.org/wiki/Windows-1252)
+- **Rust Encoding**: `encoding_rs` crate for CP1252 support
+
+---
+
+**Document Version**: 1.0  
+**Last Updated**: March 2026  
+**Protocol Version**: 1
