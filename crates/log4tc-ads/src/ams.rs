@@ -423,23 +423,26 @@ mod tests {
 
     #[test]
     fn test_ams_tcp_frame_serialize() {
+        let ams_header = AmsHeader {
+            target_net_id: AmsNetId::from_str("192.168.1.100.1.1").unwrap(),
+            target_port: 16150,
+            source_net_id: AmsNetId::from_str("5.0.0.0.1.1").unwrap(),
+            source_port: 50000,
+            command_id: ADS_CMD_WRITE,
+            state_flags: ADS_STATE_REQUEST,
+            data_length: 0,
+            error_code: 0,
+            invoke_id: 99999,
+        };
+
+        let payload = vec![];
         let frame = AmsTcpFrame {
             tcp_header: AmsTcpHeader {
                 reserved: 0,
-                data_length: 32,
+                data_length: 32 + payload.len() as u32,
             },
-            ams_header: AmsHeader {
-                target_net_id: AmsNetId::from_str("192.168.1.100.1.1").unwrap(),
-                target_port: 16150,
-                source_net_id: AmsNetId::from_str("5.0.0.0.1.1").unwrap(),
-                source_port: 50000,
-                command_id: ADS_CMD_WRITE,
-                state_flags: ADS_STATE_REQUEST,
-                data_length: 0,
-                error_code: 0,
-                invoke_id: 99999,
-            },
-            payload: vec![],
+            ams_header,
+            payload,
         };
 
         let serialized = frame.serialize();
