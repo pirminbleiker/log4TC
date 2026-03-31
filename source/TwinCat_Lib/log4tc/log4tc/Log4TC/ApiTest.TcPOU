@@ -1,0 +1,50 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.13">
+  <POU Name="ApiTest" Id="{d28d37df-7237-480f-92a3-f93252c88566}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM INTERNAL ApiTest
+VAR
+	nInt			: INT;
+	sStr			: STRING;
+	fFloat			: REAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Einfaches Logging
+F_LogLC(
+	E_LogLevel.eInfo,
+	'ApiTest',
+	'Log message',
+	0
+);
+
+F_LogL3(
+	E_LogLevel.eInfo,
+	Const.sGlobalLogger, 
+	'Log Message Arg={structuredArg} Arg={1} Arg=%s', 
+	F_StringEx('Arg 1'),
+	F_StringEx('Arg 2'),
+	F_StringEx('Arg 3')
+);
+
+F_LogA3(
+	E_LogLevel.eError,
+	'Log Message Arg={structuredArg} Arg={1} Arg=%s',
+	nInt,
+	sStr,
+	fFloat
+);
+
+// Einfaches Logging mit expliziten Logger
+F_LogL3(
+	E_LogLevel.eInfo, 
+	'mbc4Log.Test',
+	'Log Message Arg={structuredArg} Arg={1} Arg=%s', 
+	F_StringEx('Arg 1'),
+	F_StringEx('Arg 2'),
+	F_StringEx('Arg 3')
+);
+
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

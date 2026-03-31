@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Refactors>
+  <Renames>
+    <RenamedType>
+      <Type guid="ed00c891-12ea-498a-9892-ef7c629ea7f1">_CHECKLOGLEVEL</Type>
+      <From>CheckLogLevel</From>
+      <To>_IsLogLevelActive</To>
+    </RenamedType>
+  </Renames>
+</Refactors>
