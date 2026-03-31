@@ -15,6 +15,12 @@ services:
       - ./otel-collector-config.yml:/etc/otel-collector-config.yml
     environment:
       - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13133"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Log4TC Service
   log4tc-service:
@@ -23,17 +29,24 @@ services:
       dockerfile: Dockerfile
     container_name: log4tc-service
     ports:
-      - "16150:16150"  # ADS listener
-      - "4318:4318"    # OTLP HTTP (forwarded from app)
+      - "16150:16150"  # ADS listener (from PLC to Docker host)
+      - "4318:4318"    # OTLP HTTP receiver
     environment:
       - LOG4TC_CONFIG=/etc/log4tc/config.json
       - RUST_LOG=log4tc_service=info
     volumes:
-      - ./config.example.json:/etc/log4tc/config.json:ro
+      - ./config.docker.json:/etc/log4tc/config.json:ro
     depends_on:
-      - otel-collector
+      otel-collector:
+        condition: service_healthy
     command:
       - "--config"
       - "/etc/log4tc/config.json"
       - "--ads-port"
       - "16150"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo '' | timeout 1 nc localhost 16150 || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

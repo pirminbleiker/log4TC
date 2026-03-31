@@ -15,13 +15,6 @@
     {
       "Type": "nlog",
       "ConfigFile": "nlog.config"
-    },
-    {
-      "Type": "graylog",
-      "Host": "localhost",
-      "Port": 12201,
-      "Protocol": "UDP",
-      "Facility": "LOG4TC"
     }
   ],
   "service": {

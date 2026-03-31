@@ -40,8 +40,9 @@ impl Log4TcService {
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
 
         // Start ADS listener (legacy protocol support)
+        // Use 0.0.0.0 to accept connections from any interface (required for Docker)
         let ads_listener = AdsListener::new(
-            "127.0.0.1".to_string(),
+            "0.0.0.0".to_string(),
             self.ads_port,
             log_tx.clone(),
         );
