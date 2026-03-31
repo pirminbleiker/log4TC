@@ -2,7 +2,10 @@
 
 ## Overview
 
-This guide explains how to run Log4TC in a container (Docker or Podman) when you **do not have an ADS router** on the host machine. The service accepts raw TCP connections on port 16150 directly from your TwinCAT PLC.
+This guide explains how to run Log4TC in a container (Docker or Podman) when you **do not have an ADS router** on the host machine. The service accepts log entries via two protocols:
+
+1. **AMS/TCP Server (Recommended)**: Port 48898 - ADS Write commands routed through AMS/TCP from your PLC's ADS Router
+2. **Legacy ADS TCP**: Port 16150 - Raw TCP connections for backward compatibility
 
 ## Architecture
 
@@ -62,19 +65,48 @@ podman compose up
 ```
 
 This starts:
-- **log4tc-service**: Listens on port 16150 for ADS messages
+- **log4tc-service**: Listens on port 48898 (AMS/TCP) and 16150 (legacy ADS) for log messages
 - **otel-collector**: Receives OpenTelemetry logs on port 4318, outputs to stdout
 
 ### 3. Configure Your TwinCAT PLC
 
-In your PLC code or TwinCAT IDE:
+#### Option A: AMS/TCP Route (Recommended)
 
-1. Set the target AMS Net ID to your container host IP
-   - Example: `192.168.1.100` (the machine running Docker or Podman)
+This method uses the PLC's built-in ADS Router to connect via AMS/TCP:
 
-2. Connect to port 16150
+1. In the TwinCAT IDE, create a new **AMS Route** in your project:
+   - **Route Name**: `log4tc-docker` (or any name)
+   - **AMS Net ID**: Set to the container host's Docker internal IP + `.1.1`
+     - Example: `172.17.0.2.1.1` (depends on your Docker network)
+     - For Podman: Check the network using `podman network inspect podman`
+   - **Transport Type**: TCP/IP
+   - **Address**: Container host IP (e.g., `192.168.1.100` or the Docker/Podman gateway IP)
+   - **Port**: 48898 (default AMS/TCP port)
 
-3. Send ADS log messages using the standard TwinCAT logging API
+2. In your PLC code, use the standard TwinCAT logging API - it will automatically route through the configured AMS route
+
+3. Logs will be transmitted via AMS/TCP port 48898
+
+#### Option B: Legacy Direct ADS (Port 16150)
+
+For backward compatibility, the service still listens on port 16150 for direct ADS connections:
+
+1. Configure your PLC logging to send directly to port 16150
+2. This method bypasses the AMS Router
+
+#### Get Your Docker/Podman IP
+
+**Docker:**
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' log4tc-service
+```
+
+**Podman:**
+```bash
+podman inspect log4tc-service -f '{{.NetworkSettings.Gateway}}'
+# or check the network
+podman network inspect podman | grep -A 20 gateway_ipv4
+```
 
 ### 4. Verify It Works
 
@@ -91,7 +123,8 @@ podman compose logs -f log4tc-service
 ```
 
 You should see:
-- Service startup message: "ADS listener started on 0.0.0.0:16150"
+- Service startup messages for both AMS/TCP server and ADS listener
+- Specifically: "AMS/TCP server listening on 0.0.0.0:48898"
 - New connections from your PLC IP
 - Log entries being received and processed
 
@@ -99,7 +132,9 @@ You should see:
 
 ### config.docker.json
 - **Receiver Host**: 0.0.0.0 (accepts external connections)
-- **ADS Port**: 16150 (can be changed in docker-compose.yml)
+- **AMS Net ID**: 172.17.0.2.1.1 (Docker internal IP - adjust for your setup)
+- **AMS/TCP Port**: 48898 (for AMS routed ADS commands)
+- **ADS Port**: 16150 (for legacy direct ADS connections)
 - **Logging Output**: stdout (visible in docker-compose logs)
 - **OTLP HTTP Port**: 4318
 
@@ -136,28 +171,48 @@ With host network, the container shares the host's network stack, but this only 
 
 ### "Connection refused" from PLC
 
-1. Verify the container host IP: `ipconfig` (Windows) or `ifconfig` (Linux)
-2. Ensure no firewall blocks port 16150
-3. Check service is running:
+1. Verify the container host IP (for AMS Net ID):
+   - `ipconfig` (Windows) or `ifconfig` (Linux)
+   - Get the Docker/Podman gateway IP (see **Get Your Docker/Podman IP** above)
+2. Ensure no firewall blocks ports 48898 (AMS/TCP) and/or 16150 (legacy ADS)
+3. Check AMS Net ID configuration matches your container setup
+4. Check service is running:
    - Docker: `docker-compose ps`
    - Podman: `podman-compose ps` or `podman compose ps`
-4. View logs:
-   - Docker: `docker-compose logs log4tc-service`
-   - Podman: `podman-compose logs log4tc-service` or `podman compose logs log4tc-service`
+5. View logs:
+   - Docker: `docker-compose logs -f log4tc-service`
+   - Podman: `podman-compose logs -f log4tc-service` or `podman compose logs -f log4tc-service`
 
 ### "Address already in use"
 
-Port 16150 is already in use on your host:
+Port 48898 or 16150 is already in use on your host:
 
 ```bash
-# Find what's using port 16150
-netstat -ano | findstr :16150  # Windows
-lsof -i :16150                 # Linux/Mac
+# Find what's using the port
+netstat -ano | findstr :48898  # Windows (AMS/TCP)
+netstat -ano | findstr :16150  # Windows (legacy ADS)
+lsof -i :48898                 # Linux/Mac
+lsof -i :16150
 
 # Change port in docker-compose.yml and redeploy
 ```
 
 **For Podman rootless mode:** Port numbers below 1024 require special configuration. If using ports < 1024, check Podman documentation for `net.ipv4.ip_unprivileged_port_start`.
+
+### AMS Net ID Mismatch
+
+The AMS Net ID in config.docker.json must match the Docker/Podman gateway IP:
+
+```bash
+# Get current gateway IP
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' log4tc-service
+# or
+podman inspect log4tc-service -f '{{.NetworkSettings.Gateway}}'
+
+# Update config.docker.json if needed (format: X.X.X.X.1.1)
+```
+
+If the AMS Net ID is wrong, the PLC's ADS Router won't find the route, causing connection failures.
 
 ### No logs appearing
 

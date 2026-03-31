@@ -402,21 +402,22 @@ mod tests {
 
     #[test]
     fn test_ams_tcp_frame_parse() {
-        let mut data = vec![0u8; 50];
+        let payload_len = 12u32; // 12 bytes of payload
+        let mut data = vec![0u8; 6 + 32 + 12];
         data[0..2].copy_from_slice(&0u16.to_le_bytes());
-        data[2..6].copy_from_slice(&32u32.to_le_bytes());
+        data[2..6].copy_from_slice(&(32u32 + payload_len).to_le_bytes());
         data[6..12].copy_from_slice(&[192, 168, 1, 100, 1, 1]);
         data[12..14].copy_from_slice(&16150u16.to_le_bytes());
         data[14..20].copy_from_slice(&[5, 0, 0, 0, 1, 1]);
         data[20..22].copy_from_slice(&50000u16.to_le_bytes());
         data[22..24].copy_from_slice(&ADS_CMD_WRITE.to_le_bytes());
         data[24..26].copy_from_slice(&ADS_STATE_REQUEST.to_le_bytes());
-        data[26..30].copy_from_slice(&0u32.to_le_bytes());
+        data[26..30].copy_from_slice(&payload_len.to_le_bytes());
         data[30..34].copy_from_slice(&0u32.to_le_bytes());
         data[34..38].copy_from_slice(&12345u32.to_le_bytes());
 
         let frame = AmsTcpFrame::parse(&data).unwrap();
-        assert_eq!(frame.tcp_header.data_length, 32);
+        assert_eq!(frame.tcp_header.data_length, 32 + payload_len);
         assert_eq!(frame.ams_header.command_id, ADS_CMD_WRITE);
         assert_eq!(frame.ams_header.invoke_id, 12345);
     }

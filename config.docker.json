@@ -9,7 +9,10 @@
     "httpPort": 4318,
     "grpcPort": 4317,
     "maxBodySize": 4194304,
-    "requestTimeoutSecs": 30
+    "requestTimeoutSecs": 30,
+    "amsNetId": "172.17.0.2.1.1",
+    "amsTcpPort": 48898,
+    "adsPort": 16150
   },
   "outputs": [
     {

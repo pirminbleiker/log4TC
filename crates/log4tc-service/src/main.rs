@@ -25,9 +25,13 @@ struct Args {
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
 
-    /// ADS listener port
+    /// ADS listener port (legacy ADS direct TCP)
     #[arg(short, long, default_value = "16150")]
     ads_port: u16,
+
+    /// AMS Net ID for the TCP server (e.g., "172.17.0.2.1.1")
+    #[arg(long, default_value = "0.0.0.0.1.1")]
+    ams_net_id: String,
 }
 
 #[tokio::main]
@@ -48,11 +52,19 @@ async fn main() -> Result<()> {
 /// Run the Log4TC service
 async fn run_service(args: Args) -> Result<()> {
     // Load configuration
-    let settings = AppSettings::from_json_file(&args.config)
+    let mut settings = AppSettings::from_json_file(&args.config)
         .context(format!("Failed to load configuration from {}", args.config.display()))?;
 
     tracing::info!("Configuration loaded from {}", args.config.display());
+
+    // Override AMS Net ID from command line if different from default
+    if args.ams_net_id != "0.0.0.0.1.1" {
+        settings.receiver.ams_net_id = args.ams_net_id.clone();
+        tracing::info!("AMS Net ID overridden to {}", args.ams_net_id);
+    }
+
     tracing::info!("ADS listener will bind to port {}", args.ads_port);
+    tracing::info!("AMS/TCP server will listen on port 48898 with Net ID: {}", settings.receiver.ams_net_id);
 
     // Create and run service
     let service = Log4TcService::new(settings, args.ads_port).await?;

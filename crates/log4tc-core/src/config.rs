@@ -40,6 +40,27 @@ pub struct ReceiverConfig {
     pub max_body_size: usize,
     /// Request timeout in seconds
     pub request_timeout_secs: u64,
+    /// AMS Net ID for the TCP server (e.g., "172.17.0.2.1.1")
+    #[serde(default = "default_ams_net_id")]
+    pub ams_net_id: String,
+    /// AMS/TCP listening port (default 48898)
+    #[serde(default = "default_ams_tcp_port")]
+    pub ams_tcp_port: u16,
+    /// ADS port for AMS/TCP server (default 16150)
+    #[serde(default = "default_ads_port")]
+    pub ads_port: u16,
+}
+
+fn default_ams_net_id() -> String {
+    "0.0.0.0.1.1".to_string()
+}
+
+fn default_ams_tcp_port() -> u16 {
+    48898
+}
+
+fn default_ads_port() -> u16 {
+    16150
 }
 
 impl Default for ReceiverConfig {
@@ -50,6 +71,9 @@ impl Default for ReceiverConfig {
             grpc_port: 4317,
             max_body_size: 4 * 1024 * 1024, // 4 MB
             request_timeout_secs: 30,
+            ams_net_id: "0.0.0.0.1.1".to_string(),
+            ams_tcp_port: 48898,
+            ads_port: 16150,
         }
     }
 }
@@ -161,6 +185,9 @@ mod tests {
             grpc_port: 9090,
             max_body_size: 8 * 1024 * 1024,
             request_timeout_secs: 60,
+            ams_net_id: "192.168.1.100.1.1".to_string(),
+            ams_tcp_port: 48898,
+            ads_port: 16150,
         };
 
         assert_eq!(config.host, "0.0.0.0");
@@ -292,6 +319,9 @@ mod tests {
             grpc_port: 1025,
             max_body_size: 1024,
             request_timeout_secs: 30,
+            ams_net_id: "127.0.0.1.1.1".to_string(),
+            ams_tcp_port: 48898,
+            ads_port: 16150,
         };
 
         assert!(config.http_port > 0);
@@ -305,6 +335,9 @@ mod tests {
             grpc_port: 4317,
             max_body_size: 100 * 1024 * 1024, // 100 MB
             request_timeout_secs: 30,
+            ams_net_id: "127.0.0.1.1.1".to_string(),
+            ams_tcp_port: 48898,
+            ads_port: 16150,
         };
 
         assert_eq!(config.max_body_size, 100 * 1024 * 1024);

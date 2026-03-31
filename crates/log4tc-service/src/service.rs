@@ -1,9 +1,10 @@
 //! Main service orchestration with graceful shutdown and backpressure handling
 
 use anyhow::Result;
-use log4tc_ads::AdsListener;
+use log4tc_ads::{AdsListener, AmsTcpServer, AmsNetId};
 use log4tc_core::AppSettings;
 use log4tc_otel::OtelHttpReceiver;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::{mpsc, broadcast};
 use tokio::time::timeout;
@@ -38,6 +39,31 @@ impl Log4TcService {
 
         // Create shutdown signal channel (broadcast for multiple receivers)
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+
+        // Start AMS/TCP server (primary ADS interface via AMS/TCP routing)
+        let net_id = AmsNetId::from_str(&self.settings.receiver.ams_net_id)
+            .map_err(|e| anyhow::anyhow!("Invalid AMS Net ID: {}", e))?;
+
+        let ams_server = AmsTcpServer::new(
+            "0.0.0.0".to_string(),
+            net_id,
+            self.settings.receiver.ads_port,
+            log_tx.clone(),
+        );
+
+        let mut shutdown_rx_ams = shutdown_tx.subscribe();
+        let ams_handle = tokio::spawn(async move {
+            tokio::select! {
+                result = ams_server.start() => {
+                    if let Err(e) = result {
+                        tracing::error!("AMS/TCP server error: {}", e);
+                    }
+                }
+                _ = shutdown_rx_ams.recv() => {
+                    tracing::info!("AMS/TCP server shutdown requested");
+                }
+            }
+        });
 
         // Start ADS listener (legacy protocol support)
         // Use 0.0.0.0 to accept connections from any interface (required for Docker)
@@ -117,7 +143,7 @@ impl Log4TcService {
         let shutdown_timeout = Duration::from_secs(self.settings.service.shutdown_timeout_secs);
 
         let _ = timeout(shutdown_timeout, async {
-            let _ = tokio::join!(ads_handle, receiver_handle, dispatcher_handle);
+            let _ = tokio::join!(ams_handle, ads_handle, receiver_handle, dispatcher_handle);
         }).await.or_else(|_| {
             tracing::warn!("Shutdown timeout exceeded, aborting tasks");
             Ok::<_, anyhow::Error>(())
