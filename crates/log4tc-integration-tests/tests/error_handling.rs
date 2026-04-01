@@ -248,9 +248,9 @@ fn test_unicode_characters() {
     assert_eq!(record.log_attributes.get("unicode"), Some(&json!(unicode_str)));
 }
 
-// Helper function
+// Helper function (1-byte length prefix)
 fn append_string(data: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();
-    data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+    data.push(bytes.len() as u8);
     data.extend_from_slice(bytes);
 }

@@ -23,8 +23,8 @@ fn test_e2e_parse_minimal_ads_message() {
     // Logger string
     append_string(&mut data, "test");
 
-    // Level
-    data.push(0x02); // Info
+    // Level (2 bytes, u16 LE)
+    data.extend_from_slice(&(0x02u16).to_le_bytes()); // Info
 
     // Timestamps (8 bytes each)
     data.extend_from_slice(&[0; 8]); // plc_timestamp
@@ -271,9 +271,9 @@ fn test_e2e_minimal_log_entry() {
     assert!(record.log_attributes.contains_key("source.address"));
 }
 
-// Helper function to append strings in ADS format
+// Helper function to append strings in ADS format (1-byte length prefix)
 fn append_string(data: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();
-    data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+    data.push(bytes.len() as u8);
     data.extend_from_slice(bytes);
 }

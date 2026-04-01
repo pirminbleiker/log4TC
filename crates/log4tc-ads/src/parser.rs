@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn test_parse_invalid_version() {
         let mut payload = vec![255]; // Invalid version
-        payload.extend_from_slice(&1u16.to_le_bytes()); // message length
+        payload.push(1); // message length (1 byte)
         payload.push(b'A');
 
         let result = AdsParser::parse(&payload);
@@ -479,11 +479,11 @@ mod tests {
     #[test]
     fn test_parse_invalid_log_level() {
         let mut payload = vec![1]; // version
-        payload.extend_from_slice(&4u16.to_le_bytes()); // message length
+        payload.push(4); // message length (1 byte)
         payload.extend_from_slice(b"test");
-        payload.extend_from_slice(&6u16.to_le_bytes()); // logger length
+        payload.push(6); // logger length (1 byte)
         payload.extend_from_slice(b"logger");
-        payload.push(99); // Invalid level
+        payload.extend_from_slice(&99u16.to_le_bytes()); // Invalid level (2 bytes)
 
         let result = AdsParser::parse(&payload);
         assert!(result.is_err());
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn test_parse_buffer_overflow_detection() {
         let mut payload = vec![1]; // version
-        payload.extend_from_slice(&1000u16.to_le_bytes()); // Claims 1000 byte message
+        payload.push(255); // Claims 255 byte message (1 byte length)
         payload.extend_from_slice(b"short"); // But only provides 5 bytes
 
         let result = AdsParser::parse(&payload);
@@ -527,14 +527,14 @@ mod tests {
 
     #[test]
     fn test_parse_large_message() {
-        // Create a message larger than typical
-        let large_message = "x".repeat(10000);
+        // Create a message up to 255 bytes (max for 1-byte length prefix)
+        let large_message = "x".repeat(255);
         let payload = build_test_payload(&large_message, "logger", 2);
         let result = AdsParser::parse(&payload);
         assert!(result.is_ok());
 
         let entry = result.unwrap();
-        assert_eq!(entry.message.len(), 10000);
+        assert_eq!(entry.message.len(), 255);
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn test_bytes_reader_read_string() {
         let text = "Hello";
-        let mut data = (text.len() as u16).to_le_bytes().to_vec();
+        let mut data = vec![text.len() as u8]; // 1-byte length prefix
         data.extend_from_slice(text.as_bytes());
 
         let mut reader = BytesReader::new(&data);
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_bytes_reader_invalid_utf8() {
-        let mut data = 2u16.to_le_bytes().to_vec();
+        let mut data = vec![2u8]; // 1-byte length prefix
         data.push(0xFF);
         data.push(0xFF); // Invalid UTF-8 sequence
 
@@ -587,12 +587,12 @@ mod tests {
     fn test_parse_with_positional_arguments() {
         let mut payload = build_test_payload("User {0} logged in", "auth.logger", 2);
 
-        // Add positional argument (value type 1 = int)
+        // Add positional argument (value type 8 = DINT)
         // Remove the end marker first
         payload.pop();
         payload.push(1); // type_id = argument
         payload.push(0); // index = 0
-        payload.push(1); // value type = int
+        payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT (2 bytes)
         payload.extend_from_slice(&123i32.to_le_bytes());
         payload.push(0); // end marker
 
@@ -610,11 +610,11 @@ mod tests {
         payload.push(2); // type_id = context
         payload.push(1); // scope = 1
         let ctx_name = "request_id";
-        payload.extend_from_slice(&(ctx_name.len() as u16).to_le_bytes());
+        payload.push(ctx_name.len() as u8); // 1-byte length for string name
         payload.extend_from_slice(ctx_name.as_bytes());
-        payload.push(3); // value type = string
+        payload.extend_from_slice(&12i16.to_le_bytes()); // value type = STRING (2 bytes)
         let ctx_value = "req-12345";
-        payload.extend_from_slice(&(ctx_value.len() as u16).to_le_bytes());
+        payload.push(ctx_value.len() as u8); // 1-byte length for string value
         payload.extend_from_slice(ctx_value.as_bytes());
         payload.push(0); // end marker
 
@@ -630,23 +630,23 @@ mod tests {
         // Add multiple arguments
         payload.pop(); // Remove end marker
 
-        // Argument 0: int 42
+        // Argument 0: DINT 42
         payload.push(1); // type_id = argument
         payload.push(0); // index
-        payload.push(1); // value type = int
+        payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT (2 bytes)
         payload.extend_from_slice(&42i32.to_le_bytes());
 
-        // Argument 1: string "test"
+        // Argument 1: STRING "test"
         payload.push(1); // type_id = argument
         payload.push(1); // index
-        payload.push(3); // value type = string
-        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&12i16.to_le_bytes()); // value type = STRING (2 bytes)
+        payload.push(4); // 1-byte length for "test"
         payload.extend_from_slice(b"test");
 
-        // Argument 2: bool true
+        // Argument 2: BOOL true
         payload.push(1); // type_id = argument
         payload.push(2); // index
-        payload.push(4); // value type = bool
+        payload.extend_from_slice(&13i16.to_le_bytes()); // value type = BOOL (2 bytes)
         payload.push(1); // value = true
 
         payload.push(0); // end marker
@@ -664,9 +664,9 @@ mod tests {
         payload.pop(); // Remove end marker
 
         // Test null
-        payload.push(1);
-        payload.push(0);
-        payload.push(0); // type = null
+        payload.push(1); // type_id = argument
+        payload.push(0); // index
+        payload.extend_from_slice(&0i16.to_le_bytes()); // type = null (2 bytes)
 
         payload.push(0); // end marker
 
@@ -681,7 +681,7 @@ mod tests {
 
         payload.push(1); // type_id = argument
         payload.push(0); // index
-        payload.push(2); // value type = float
+        payload.extend_from_slice(&5i16.to_le_bytes()); // value type = LREAL (2 bytes)
         payload.extend_from_slice(&3.14f64.to_le_bytes());
 
         payload.push(0); // end marker
@@ -699,7 +699,7 @@ mod tests {
 
         payload.push(1); // type_id = argument
         payload.push(0); // index
-        payload.push(1); // value type = int
+        payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT (2 bytes)
         payload.extend_from_slice(&(u32::MAX as i32).to_le_bytes());
 
         payload.push(0); // end marker
@@ -715,7 +715,7 @@ mod tests {
 
         payload.push(1); // type_id = argument
         payload.push(0); // index
-        payload.push(1); // value type = int
+        payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT (2 bytes)
         payload.extend_from_slice(&(-42i32).to_le_bytes());
 
         payload.push(0); // end marker
@@ -732,11 +732,11 @@ mod tests {
         payload.push(2); // type_id = context
         payload.push(1); // scope
         let long_name = "x".repeat(1000);
-        payload.extend_from_slice(&(long_name.len() as u16).to_le_bytes());
+        payload.push(long_name.len() as u8); // 1-byte length for context name
         payload.extend_from_slice(long_name.as_bytes());
-        payload.push(3); // value type = string
+        payload.extend_from_slice(&12i16.to_le_bytes()); // value type = STRING (2 bytes)
         let value = "test";
-        payload.extend_from_slice(&(value.len() as u16).to_le_bytes());
+        payload.push(value.len() as u8); // 1-byte length for value
         payload.extend_from_slice(value.as_bytes());
 
         payload.push(0); // end marker
@@ -754,7 +754,7 @@ mod tests {
         for i in 0..32 {
             payload.push(1); // type_id = argument
             payload.push(i as u8); // index
-            payload.push(1); // value type = int
+            payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT (2 bytes)
             payload.extend_from_slice(&(i as i32).to_le_bytes());
         }
 
@@ -804,36 +804,36 @@ mod tests {
         let mut payload = build_test_payload("Test {0} {1} {2} {3} {4}", "logger", 2);
         payload.pop(); // Remove end marker
 
-        // int
-        payload.push(1);
-        payload.push(0);
-        payload.push(1);
+        // DINT 100
+        payload.push(1); // type_id = argument
+        payload.push(0); // index
+        payload.extend_from_slice(&8i16.to_le_bytes()); // value type = DINT
         payload.extend_from_slice(&100i32.to_le_bytes());
 
-        // float
-        payload.push(1);
-        payload.push(1);
-        payload.push(2);
+        // LREAL 2.71828
+        payload.push(1); // type_id = argument
+        payload.push(1); // index
+        payload.extend_from_slice(&5i16.to_le_bytes()); // value type = LREAL
         payload.extend_from_slice(&2.71828f64.to_le_bytes());
 
-        // string
-        payload.push(1);
-        payload.push(2);
-        payload.push(3);
-        payload.extend_from_slice(&5u16.to_le_bytes());
+        // STRING "hello"
+        payload.push(1); // type_id = argument
+        payload.push(2); // index
+        payload.extend_from_slice(&12i16.to_le_bytes()); // value type = STRING
+        payload.push(5); // 1-byte length
         payload.extend_from_slice(b"hello");
 
-        // bool true
-        payload.push(1);
-        payload.push(3);
-        payload.push(4);
-        payload.push(1);
+        // BOOL true
+        payload.push(1); // type_id = argument
+        payload.push(3); // index
+        payload.extend_from_slice(&13i16.to_le_bytes()); // value type = BOOL
+        payload.push(1); // true
 
-        // bool false
-        payload.push(1);
-        payload.push(4);
-        payload.push(4);
-        payload.push(0);
+        // BOOL false
+        payload.push(1); // type_id = argument
+        payload.push(4); // index
+        payload.extend_from_slice(&13i16.to_le_bytes()); // value type = BOOL
+        payload.push(0); // false
 
         payload.push(0); // end marker
 

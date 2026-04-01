@@ -14,7 +14,7 @@ fn test_parser_core_otel_pipeline() {
 
     append_string(&mut data, "Integration test message");
     append_string(&mut data, "integration.test");
-    data.push(0x02); // Info level
+    data.extend_from_slice(&(0x02u16).to_le_bytes()); // Info level (2 bytes)
 
     // Timestamps (FILETIME: 100-nanosecond intervals since 1601-01-01)
     // Use a valid timestamp: 2024-01-01 00:00:00 UTC = 133477536000000000
@@ -200,9 +200,9 @@ fn test_type_conversions() {
     assert!(!record.log_attributes.is_empty());
 }
 
-// Helper function
+// Helper function (1-byte length prefix)
 fn append_string(data: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();
-    data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+    data.push(bytes.len() as u8);
     data.extend_from_slice(bytes);
 }

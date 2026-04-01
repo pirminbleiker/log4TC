@@ -229,20 +229,18 @@ impl AmsTcpServer {
 
         let header = AmsHeader::parse(data)?;
 
-        tracing::debug!(
-            "AMS frame: cmd={} state={:04x} src={}:{} -> dst={}:{} len={}",
+        tracing::trace!(
+            "AMS frame: cmd={} src={}:{} -> dst={}:{}",
             header.command_id,
-            header.state_flags,
             header.source_net_id.to_string(),
             header.source_port,
             header.target_net_id.to_string(),
             header.target_port,
-            header.data_length
         );
 
         match header.command_id {
             ADS_CMD_READ_DEVICE_INFO => {
-                tracing::debug!("DeviceInfo request from {} (port {})", peer_addr, header.target_port);
+                tracing::trace!("DeviceInfo request from {}", peer_addr);
                 let mut payload = Vec::new();
                 payload.extend_from_slice(&0u32.to_le_bytes()); // Result: success
                 payload.push(0); // Major version
@@ -293,7 +291,7 @@ impl AmsTcpServer {
             }
 
             ADS_CMD_READ_STATE => {
-                tracing::debug!("ReadState from {} port={}", peer_addr, header.target_port);
+                tracing::trace!("ReadState from {}", peer_addr);
                 // Result(4) + AdsState(2) + DeviceState(2)
                 let mut payload = Vec::new();
                 payload.extend_from_slice(&0u32.to_le_bytes()); // Result: success
