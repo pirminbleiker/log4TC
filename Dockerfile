@@ -28,4 +28,4 @@ COPY --from=builder /app/target/release/log4tc-service /usr/local/bin/
 COPY config.docker.json /etc/log4tc/config.json
 ENV LOG4TC_CONFIG=/etc/log4tc/config.json
 EXPOSE 48898 16150
-ENTRYPOINT ["log4tc-service"]
+ENTRYPOINT ["log4tc-service", "--config", "/etc/log4tc/config.json"]
