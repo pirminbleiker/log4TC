@@ -69,14 +69,16 @@ impl MessageFormatter {
             let placeholder = cap[0].to_string();
 
             if let Ok(index) = key.parse::<usize>() {
-                // Numeric placeholder {0}, {1} → direct index lookup
-                if let Some(value) = arguments.get(&index) {
+                // Numeric placeholder {0}, {1} → PLC args are 1-based
+                // {0} = first arg = index 1, {1} = second arg = index 2
+                let arg_index = index + 1;
+                if let Some(value) = arguments.get(&arg_index) {
                     replacements.push((placeholder, Self::value_to_string(value)));
                 }
                 positional_index += 1;
             } else {
                 // Named placeholder {time}, {name} → match by order of appearance
-                // PLC uses 1-based arg indices, so first named placeholder = arg[1]
+                // PLC args are 1-based: first placeholder = arg[1]
                 let arg_index = positional_index + 1;
                 if let Some(value) = arguments.get(&arg_index) {
                     replacements.push((placeholder, Self::value_to_string(value)));
