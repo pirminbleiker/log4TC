@@ -77,16 +77,23 @@ impl OtelExporter {
 
     /// Create a new exporter with custom config
     pub fn with_config(config: ExportConfig) -> Self {
-        // Build HTTP client with TLS hardening
-        let http_client = reqwest::ClientBuilder::new()
-            .https_only(true) // Enforce HTTPS for remote endpoints
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .build()
-            .unwrap_or_else(|_| {
-                // Fallback: use default client if TLS configuration fails
-                tracing::warn!("Failed to build HTTPS-only client, falling back to default");
-                reqwest::Client::new()
-            });
+        // Build HTTP client - allow HTTP for internal Docker networking
+        let is_local = config.endpoint.contains("localhost")
+            || config.endpoint.contains("127.0.0.1")
+            || config.endpoint.contains("otel-collector")
+            || config.endpoint.starts_with("http://");
+
+        let mut builder = reqwest::ClientBuilder::new()
+            .timeout(Duration::from_secs(config.timeout_secs));
+
+        if !is_local {
+            builder = builder.https_only(true);
+        }
+
+        let http_client = builder.build().unwrap_or_else(|_| {
+            tracing::warn!("Failed to build HTTP client, falling back to default");
+            reqwest::Client::new()
+        });
 
         Self {
             config,

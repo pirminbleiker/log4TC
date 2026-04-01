@@ -1,40 +1,58 @@
-//! Log dispatcher - routes logs to configured outputs with backpressure handling
+//! Log dispatcher - routes logs to OTEL exporter and configured outputs
 
 use anyhow::Result;
 use log4tc_core::{AppSettings, LogEntry, LogRecord, MessageFormatter};
+use log4tc_otel::OtelExporter;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Output plugin trait for implementing custom output handlers
 #[async_trait::async_trait]
 pub trait OutputPlugin: Send + Sync {
-    /// Handle a log record asynchronously
     async fn handle(&self, record: LogRecord) -> Result<()>;
-
-    /// Get the plugin name
     fn name(&self) -> &str;
 }
 
-/// Default logging output plugin
-struct DefaultLogOutput;
+/// OTEL export plugin - sends logs to collector via OTLP
+struct OtelOutputPlugin {
+    exporter: OtelExporter,
+}
 
 #[async_trait::async_trait]
-impl OutputPlugin for DefaultLogOutput {
+impl OutputPlugin for OtelOutputPlugin {
+    async fn handle(&self, record: LogRecord) -> Result<()> {
+        self.exporter.export(record).await
+            .map_err(|e| anyhow::anyhow!("OTEL export error: {}", e))
+    }
+
+    fn name(&self) -> &str {
+        "otel"
+    }
+}
+
+/// Console logging output plugin (for debugging)
+struct ConsoleLogOutput;
+
+#[async_trait::async_trait]
+impl OutputPlugin for ConsoleLogOutput {
     async fn handle(&self, record: LogRecord) -> Result<()> {
         tracing::info!(
-            severity = record.severity_text,
-            body = ?record.body,
-            "Log output"
+            "[{}] {} {}",
+            record.severity_text,
+            record.scope_attributes.get("logger.name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+            record.body
         );
         Ok(())
     }
 
     fn name(&self) -> &str {
-        "default"
+        "console"
     }
 }
 
-/// Log dispatcher routes incoming logs to configured outputs
+/// Log dispatcher routes incoming logs to OTEL + configured outputs
 #[derive(Clone)]
 pub struct LogDispatcher {
     outputs: Arc<RwLock<Vec<Arc<dyn OutputPlugin>>>>,
@@ -42,24 +60,18 @@ pub struct LogDispatcher {
 }
 
 impl LogDispatcher {
-    /// Create a new log dispatcher
     pub async fn new(settings: &AppSettings) -> Result<Self> {
-        tracing::info!("Initializing log dispatcher with {} outputs", settings.outputs.len());
-
         let mut outputs: Vec<Arc<dyn OutputPlugin>> = Vec::new();
 
-        // TODO: Load and initialize actual output plugins based on configuration
-        // For now, add default output
-        if settings.outputs.is_empty() {
-            outputs.push(Arc::new(DefaultLogOutput));
-            tracing::info!("No outputs configured, using default logging output");
-        }
+        // Always add OTEL exporter
+        let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .unwrap_or_else(|_| "http://otel-collector:4318/v1/logs".to_string());
+        let exporter = OtelExporter::new(otel_endpoint, 100, 3);
+        outputs.push(Arc::new(OtelOutputPlugin { exporter }));
+        tracing::info!("OTEL exporter configured");
 
-        for output_config in &settings.outputs {
-            tracing::debug!("Configuring output: {}", output_config.output_type);
-            // TODO: Factory pattern to create outputs based on type
-            // outputs.push(Arc::new(create_output_plugin(&output_config)?));
-        }
+        // Always add console output
+        outputs.push(Arc::new(ConsoleLogOutput));
 
         Ok(Self {
             outputs: Arc::new(RwLock::new(outputs)),

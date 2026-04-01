@@ -68,7 +68,7 @@ impl AmsTcpServer {
                 .accept()
                 .await
                 .map_err(|e| crate::AdsError::BufferError(format!("Accept error: {}", e)))?;
-            tracing::debug!("AMS/TCP connection from {}", peer_addr);
+            tracing::trace!("AMS/TCP connection from {}", peer_addr);
 
             let net_id = self.net_id;
             let ads_port = self.ads_port;
@@ -270,10 +270,7 @@ impl AmsTcpServer {
                 let index_offset = u32::from_le_bytes([payload_data[4], payload_data[5], payload_data[6], payload_data[7]]);
                 let read_length = u32::from_le_bytes([payload_data[8], payload_data[9], payload_data[10], payload_data[11]]);
 
-                tracing::debug!(
-                    "Read request from {} port={} ig={:#x} io={:#x} len={}",
-                    peer_addr, header.target_port, index_group, index_offset, read_length
-                );
+                tracing::trace!("Read from {} ig={:#x} io={:#x}", peer_addr, index_group, index_offset);
 
                 // Build response: Result(4) + DataLength(4) + Data(N)
                 // Return requested amount of zero-filled data with correct DataLength
@@ -309,16 +306,7 @@ impl AmsTcpServer {
                 let payload = &data[32..];
                 let write_req = AdsWriteRequest::parse(payload)?;
 
-                tracing::info!(
-                    "ADS Write: {} bytes from {} to port {} (ig={} io={})",
-                    write_req.data.len(), peer_addr, header.target_port,
-                    write_req.index_group, write_req.index_offset
-                );
-
-                // Debug: dump first 64 bytes of write data
-                let dump_len = write_req.data.len().min(64);
-                let hex: Vec<String> = write_req.data[..dump_len].iter().map(|b| format!("{:02x}", b)).collect();
-                tracing::info!("RAW DATA [{}]: {}", dump_len, hex.join(" "));
+                tracing::debug!("ADS Write: {} bytes from {}", write_req.data.len(), peer_addr);
 
                 // Only parse as log entry if targeting our ADS port
                 // Buffer can contain MULTIPLE log entries - parse in a loop
