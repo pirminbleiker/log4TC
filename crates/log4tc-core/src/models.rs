@@ -214,7 +214,7 @@ impl LogRecord {
         }
 
         Self {
-            timestamp: entry.clock_timestamp,
+            timestamp: entry.plc_timestamp,
             body: serde_json::Value::String(entry.message),
             severity_number,
             severity_text,

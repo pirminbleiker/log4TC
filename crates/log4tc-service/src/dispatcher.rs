@@ -129,11 +129,11 @@ impl LogDispatcher {
         for record in batch {
             let mut obj = serde_json::Map::new();
 
-            // Standard fields
+            // Standard fields - use PLC timestamp as _time for correct ordering
             obj.insert("_msg".to_string(), record.body.clone());
+            obj.insert("_time".to_string(), serde_json::json!(record.timestamp.to_rfc3339()));
             obj.insert("level".to_string(), serde_json::json!(record.severity_text.to_lowercase()));
             obj.insert("severity_number".to_string(), serde_json::json!(record.severity_number));
-            obj.insert("timestamp".to_string(), serde_json::json!(record.timestamp.to_rfc3339()));
 
             // Scope attributes (logger name)
             for (k, v) in &record.scope_attributes {
