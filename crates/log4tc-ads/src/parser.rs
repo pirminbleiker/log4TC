@@ -291,29 +291,63 @@ impl<'a> BytesReader<'a> {
                 Ok(serde_json::json!(i64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
             }
             20000 => {                                                               // TIME (ms as u32)
-                let ms = self.read_u32()?;
-                let secs = ms / 1000;
-                let millis = ms % 1000;
-                Ok(serde_json::Value::String(format!("T#{}s{}ms", secs, millis)))
+                let total_ms = self.read_u32()?;
+                let d = total_ms / 86_400_000;
+                let h = (total_ms % 86_400_000) / 3_600_000;
+                let m = (total_ms % 3_600_000) / 60_000;
+                let s = (total_ms % 60_000) / 1000;
+                let ms = total_ms % 1000;
+                let mut parts = String::from("T#");
+                if d > 0 { parts.push_str(&format!("{}d", d)); }
+                if h > 0 { parts.push_str(&format!("{}h", h)); }
+                if m > 0 { parts.push_str(&format!("{}m", m)); }
+                if s > 0 || (d == 0 && h == 0 && m == 0 && ms == 0) { parts.push_str(&format!("{}s", s)); }
+                if ms > 0 { parts.push_str(&format!("{}ms", ms)); }
+                Ok(serde_json::Value::String(parts))
             }
             20001 => {                                                               // LTIME (100ns as u64)
                 let b = self.read_bytes(8)?;
                 let ns100 = u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]]);
-                let us = ns100 / 10;
-                Ok(serde_json::Value::String(format!("LTIME#{}us", us)))
+                let total_ns = ns100 * 100;
+                let d = total_ns / 86_400_000_000_000;
+                let h = (total_ns % 86_400_000_000_000) / 3_600_000_000_000;
+                let m = (total_ns % 3_600_000_000_000) / 60_000_000_000;
+                let s = (total_ns % 60_000_000_000) / 1_000_000_000;
+                let ms = (total_ns % 1_000_000_000) / 1_000_000;
+                let us = (total_ns % 1_000_000) / 1_000;
+                let ns = total_ns % 1_000;
+                let mut parts = String::from("LTIME#");
+                if d > 0 { parts.push_str(&format!("{}d", d)); }
+                if h > 0 { parts.push_str(&format!("{}h", h)); }
+                if m > 0 { parts.push_str(&format!("{}m", m)); }
+                if s > 0 { parts.push_str(&format!("{}s", s)); }
+                if ms > 0 { parts.push_str(&format!("{}ms", ms)); }
+                if us > 0 { parts.push_str(&format!("{}us", us)); }
+                if ns > 0 { parts.push_str(&format!("{}ns", ns)); }
+                if parts == "LTIME#" { parts.push_str("0s"); }
+                Ok(serde_json::Value::String(parts))
             }
             20004 => {                                                               // TIME_OF_DAY (ms as u32)
-                let ms = self.read_u32()?;
-                let h = ms / 3_600_000;
-                let m = (ms % 3_600_000) / 60_000;
-                let s = (ms % 60_000) / 1000;
-                Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}", h, m, s)))
+                let total_ms = self.read_u32()?;
+                let h = total_ms / 3_600_000;
+                let m = (total_ms % 3_600_000) / 60_000;
+                let s = (total_ms % 60_000) / 1000;
+                let ms = total_ms % 1000;
+                if ms > 0 {
+                    Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}.{:03}", h, m, s, ms)))
+                } else {
+                    Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}", h, m, s)))
+                }
             }
-            20002 | 20003 => {                                                      // DATE/DT → format as ISO datetime
+            20002 => {                                                               // DATE
                 let unix_secs = self.read_u32()? as i64;
-                let dt = chrono::DateTime::from_timestamp(unix_secs, 0)
-                    .unwrap_or_default();
-                Ok(serde_json::Value::String(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()))
+                let dt = chrono::DateTime::from_timestamp(unix_secs, 0).unwrap_or_default();
+                Ok(serde_json::Value::String(format!("D#{}", dt.format("%Y-%-m-%-d"))))
+            }
+            20003 => {                                                               // DATE_AND_TIME
+                let unix_secs = self.read_u32()? as i64;
+                let dt = chrono::DateTime::from_timestamp(unix_secs, 0).unwrap_or_default();
+                Ok(serde_json::Value::String(format!("DT#{}", dt.format("%Y-%-m-%-d-%H:%M:%S"))))
             }
             20005 => {                                                               // ENUM (recursive)
                 // Read underlying type, then value
