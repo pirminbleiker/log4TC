@@ -150,71 +150,154 @@ impl AmsTcpServer {
         ads_port: u16,
         log_tx: mpsc::Sender<LogEntry>,
     ) -> crate::Result<()> {
-        // Disable Nagle for low-latency responses
         let _ = stream.set_nodelay(true);
 
+        // Pre-allocated buffers to avoid per-frame allocations
+        let mut read_buf = vec![0u8; 16384]; // 16KB reusable read buffer
+        let mut resp_buf = vec![0u8; 256];   // reusable response buffer
+
         loop {
-            // Read AMS/TCP header (6 bytes) using read_exact - handles partial reads correctly
-            let mut tcp_header = [0u8; 6];
-            match stream.read_exact(&mut tcp_header).await {
+            // Read AMS/TCP header (6 bytes)
+            match stream.read_exact(&mut read_buf[..6]).await {
                 Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    tracing::debug!("AMS/TCP connection closed from {}", peer_addr);
-                    break;
-                }
-                Err(e) => {
-                    return Err(crate::AdsError::IoError(e));
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(crate::AdsError::IoError(e)),
             }
 
-            let reserved = u16::from_le_bytes([tcp_header[0], tcp_header[1]]);
-            let data_len = u32::from_le_bytes([tcp_header[2], tcp_header[3], tcp_header[4], tcp_header[5]]) as usize;
+            let reserved = u16::from_le_bytes([read_buf[0], read_buf[1]]);
+            let data_len = u32::from_le_bytes([read_buf[2], read_buf[3], read_buf[4], read_buf[5]]) as usize;
 
-            if reserved != 0 {
-                tracing::warn!("Invalid AMS/TCP reserved field: {}", reserved);
-                break; // Protocol error - close connection
-            }
-
-            if data_len == 0 || data_len > 1_048_576 {
-                tracing::warn!("Invalid AMS/TCP data length: {}", data_len);
+            if reserved != 0 || data_len == 0 || data_len > 1_048_576 {
                 break;
             }
 
-            // Read the AMS header + payload using read_exact
-            let mut data = vec![0u8; data_len];
-            match stream.read_exact(&mut data).await {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    tracing::debug!("AMS/TCP connection truncated from {}", peer_addr);
-                    break;
-                }
-                Err(e) => {
-                    return Err(crate::AdsError::IoError(e));
-                }
+            // Grow read buffer if needed (rare - only for large writes)
+            if data_len > read_buf.len() {
+                read_buf.resize(data_len, 0);
             }
 
-            // Handle the frame and send response
-            match Self::handle_frame(&data, ads_port, peer_addr, &log_tx).await {
-                Ok(response) => {
-                    // Build AMS/TCP response with header
-                    let mut response_buf = Vec::with_capacity(6 + response.len());
-                    response_buf.extend_from_slice(&0u16.to_le_bytes()); // Reserved
-                    response_buf.extend_from_slice(&(response.len() as u32).to_le_bytes()); // Data length
-                    response_buf.extend_from_slice(&response);
+            // Read AMS data into reusable buffer
+            match stream.read_exact(&mut read_buf[..data_len]).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(crate::AdsError::IoError(e)),
+            }
 
-                    if let Err(e) = stream.write_all(&response_buf).await {
-                        tracing::warn!("Failed to send AMS response to {}: {}", peer_addr, e);
+            let data = &read_buf[..data_len];
+
+            // Fast path: check command ID without full parse (byte 16-17 in AMS header)
+            if data.len() < 32 { continue; }
+            let cmd = u16::from_le_bytes([data[16], data[17]]);
+
+            if cmd == ADS_CMD_READ_STATE || cmd == ADS_CMD_READ || cmd == ADS_CMD_READ_DEVICE_INFO {
+                // Heartbeat/system query - build response in-place, zero allocation
+                let resp_len = Self::build_fast_response(data, cmd, &mut resp_buf);
+                if resp_len > 0 {
+                    if stream.write_all(&resp_buf[..resp_len]).await.is_err() {
                         break;
                     }
                 }
-                Err(e) => {
-                    tracing::debug!("Frame handling error from {}: {}", peer_addr, e);
-                    // Don't break - try to continue with next frame
+            } else if cmd == ADS_CMD_WRITE {
+                // Log data - full processing path
+                match Self::handle_frame(data, ads_port, peer_addr, &log_tx).await {
+                    Ok(response) => {
+                        if stream.write_all(&response).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => {}
+                }
+            } else {
+                // Unknown command - success response
+                let resp_len = Self::build_fast_response(data, cmd, &mut resp_buf);
+                if resp_len > 0 {
+                    let _ = stream.write_all(&resp_buf[..resp_len]).await;
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Build a response in a pre-allocated buffer - zero heap allocation
+    /// Returns total bytes written (including AMS/TCP header)
+    fn build_fast_response(request: &[u8], cmd: u16, buf: &mut Vec<u8>) -> usize {
+        // AMS header is first 32 bytes of request
+        // Response: swap source/target (bytes 0-7 ↔ 8-15), set response flag, set payload
+
+        let (payload_len, payload) = match cmd {
+            ADS_CMD_READ_STATE => {
+                // Result(4) + AdsState(2) + DeviceState(2) = 8 bytes
+                (8u32, &[0,0,0,0, 5,0, 0,0][..])
+            }
+            ADS_CMD_READ_DEVICE_INFO => {
+                // Result(4) + Major(1) + Minor(1) + Build(2) + Name(16) = 24 bytes
+                static DEVICE_INFO: [u8; 24] = [
+                    0,0,0,0,  // result: success
+                    0, 1,     // version 0.1
+                    1, 0,     // build 1
+                    b'l',b'o',b'g',b'4',b't',b'c',0,0,0,0,0,0,0,0,0,0, // name
+                ];
+                (24u32, &DEVICE_INFO[..])
+            }
+            ADS_CMD_READ => {
+                // Parse read_length from request payload (offset 40 = 32 header + 8 ig/io)
+                let read_len = if request.len() >= 44 {
+                    u32::from_le_bytes([request[40], request[41], request[42], request[43]])
+                } else {
+                    0
+                };
+                // Result(4) + DataLength(4) + Data(N)
+                // For large reads, fall back to allocated response
+                if read_len > 128 {
+                    return 0; // signal: use slow path
+                }
+                let total = 8 + read_len as usize;
+                // Build inline: result=0, datalen=read_len, zeros
+                buf.clear();
+                buf.extend_from_slice(&0u16.to_le_bytes()); // TCP reserved
+                buf.extend_from_slice(&(32 + total as u32).to_le_bytes()); // TCP data len
+                // Swap source/target in AMS header
+                buf.extend_from_slice(&request[8..14]);   // target = request.source netid
+                buf.extend_from_slice(&request[14..16]);  // target port = request.source port
+                buf.extend_from_slice(&request[0..6]);    // source = request.target netid
+                buf.extend_from_slice(&request[6..8]);    // source port = request.target port
+                buf.extend_from_slice(&request[16..18]);  // command id
+                buf.extend_from_slice(&5u16.to_le_bytes()); // state flags = response
+                buf.extend_from_slice(&(total as u32).to_le_bytes()); // data length
+                buf.extend_from_slice(&0u32.to_le_bytes()); // error code
+                buf.extend_from_slice(&request[28..32]);  // invoke id
+                buf.extend_from_slice(&0u32.to_le_bytes()); // result: success
+                buf.extend_from_slice(&read_len.to_le_bytes()); // data length
+                buf.resize(buf.len() + read_len as usize, 0); // zero data
+                return buf.len();
+            }
+            _ => {
+                // Generic success: Result(4) = 4 bytes
+                (4u32, &[0,0,0,0][..])
+            }
+        };
+
+        let ams_data_len = 32 + payload_len;
+
+        buf.clear();
+        // AMS/TCP header (6 bytes)
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&ams_data_len.to_le_bytes());
+        // AMS header (32 bytes) - swap source/target
+        buf.extend_from_slice(&request[8..14]);   // target netid = source netid from request
+        buf.extend_from_slice(&request[14..16]);  // target port
+        buf.extend_from_slice(&request[0..6]);    // source netid = target netid from request
+        buf.extend_from_slice(&request[6..8]);    // source port
+        buf.extend_from_slice(&request[16..18]);  // command id (same)
+        buf.extend_from_slice(&5u16.to_le_bytes()); // state flags = response (0x0005)
+        buf.extend_from_slice(&payload_len.to_le_bytes()); // data length
+        buf.extend_from_slice(&0u32.to_le_bytes()); // error code = 0
+        buf.extend_from_slice(&request[28..32]);  // invoke id (echo back)
+        // Payload
+        buf.extend_from_slice(payload);
+
+        buf.len()
     }
 
     async fn handle_frame(

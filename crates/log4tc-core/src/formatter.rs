@@ -1,27 +1,29 @@
 //! Message template formatting and parsing
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use regex::Regex;
 
+fn placeholder_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{([^}]+)\}").expect("regex should compile"))
+}
+
+fn numeric_placeholder_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{(\d+)\}").expect("regex should compile"))
+}
+
 /// Message formatter for template-based message formatting
-/// Supports MessageTemplates.org syntax
 pub struct MessageFormatter;
 
 impl MessageFormatter {
-    /// Format a message template with provided arguments
-    ///
-    /// Template syntax follows MessageTemplates.org:
-    /// - {0}, {1}, etc. for positional arguments
-    /// - {name} for named arguments (from context)
-    /// - {0:format} for format specifiers
     pub fn format(template: &str, arguments: &HashMap<usize, serde_json::Value>) -> String {
-        // Fast path: no placeholders
         if !template.contains('{') {
             return template.to_string();
         }
 
-        // Use regex for single-pass replacement (more efficient than repeated String::replace)
-        let re = Regex::new(r"\{(\d+)\}").expect("regex should compile");
+        let re = numeric_placeholder_regex();
         let mut result = template.to_string();
 
         // Collect all (placeholder, replacement) pairs first to avoid repeated String::replace
@@ -57,7 +59,7 @@ impl MessageFormatter {
             return template.to_string();
         }
 
-        let re = Regex::new(r"\{([^}]+)\}").expect("regex should compile");
+        let re = placeholder_regex();
         let mut result = template.to_string();
         let mut replacements = Vec::new();
         let mut positional_index: usize = 0; // tracks which arg to use for named placeholders
@@ -95,7 +97,7 @@ impl MessageFormatter {
 
     /// Extract placeholders from a template
     pub fn extract_placeholders(template: &str) -> Vec<String> {
-        let re = Regex::new(r"\{([^}]+)\}").expect("regex should compile");
+        let re = placeholder_regex();
         re.captures_iter(template)
             .map(|cap| cap[1].to_string())
             .collect()
