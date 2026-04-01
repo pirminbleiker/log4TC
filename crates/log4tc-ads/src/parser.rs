@@ -21,29 +21,30 @@ pub struct AdsParser;
 
 impl AdsParser {
     /// Parse ALL log entries from a buffer (buffer can contain multiple entries)
+    /// Parse ALL log entries from a buffer (PLC sends multiple entries per ADS Write)
     pub fn parse_all(data: &[u8]) -> Result<Vec<AdsLogEntry>> {
-        let mut entries = Vec::new();
-        let mut offset = 0;
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(AdsError::ParseError(
+                format!("Message size {} exceeds maximum {}", data.len(), MAX_MESSAGE_SIZE)
+            ));
+        }
 
-        while offset < data.len() {
-            // Skip zero padding at end
-            if data[offset] == 0 {
+        let mut entries = Vec::new();
+        let mut reader = BytesReader::new(data);
+
+        while reader.remaining() > 0 {
+            // Skip zero padding
+            if reader.peek() == Some(0) {
                 break;
             }
-            let remaining = &data[offset..];
-            match Self::parse(remaining) {
-                Ok(entry) => {
-                    entries.push(entry);
-                    // We need to know how many bytes were consumed
-                    // For now, try parsing from increasing offsets
-                    // TODO: return consumed bytes from parse()
-                    break; // For safety, parse one at a time until we track position
-                }
+            match Self::parse_from_reader(&mut reader) {
+                Ok(entry) => entries.push(entry),
                 Err(e) => {
                     if entries.is_empty() {
                         return Err(e);
                     }
-                    // Partial entry at end of buffer - that's ok
+                    // Partial entry at end - ok, we got what we could
+                    tracing::debug!("Partial entry at buffer end ({} bytes remaining): {}", reader.remaining(), e);
                     break;
                 }
             }
@@ -52,9 +53,8 @@ impl AdsParser {
         Ok(entries)
     }
 
-    /// Parse a complete ADS log entry from bytes
+    /// Parse a single ADS log entry from bytes
     pub fn parse(data: &[u8]) -> Result<AdsLogEntry> {
-        // Security: Check total message size
         if data.len() > MAX_MESSAGE_SIZE {
             return Err(AdsError::ParseError(
                 format!("Message size {} exceeds maximum {}", data.len(), MAX_MESSAGE_SIZE)
@@ -169,6 +169,14 @@ impl<'a> BytesReader<'a> {
 
     fn remaining(&self) -> usize {
         self.data.len() - self.pos
+    }
+
+    fn peek(&self) -> Option<u8> {
+        if self.pos < self.data.len() {
+            Some(self.data[self.pos])
+        } else {
+            None
+        }
     }
 
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
