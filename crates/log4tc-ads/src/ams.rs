@@ -7,7 +7,15 @@ use crate::error::{AdsError, Result};
 use std::str::FromStr;
 
 pub const AMS_TCP_PORT: u16 = 48898;
+pub const ADS_CMD_READ_DEVICE_INFO: u16 = 1;
+pub const ADS_CMD_READ: u16 = 2;
 pub const ADS_CMD_WRITE: u16 = 3;
+pub const ADS_CMD_READ_STATE: u16 = 4;
+pub const ADS_CMD_WRITE_CONTROL: u16 = 5;
+pub const ADS_CMD_ADD_NOTIFICATION: u16 = 6;
+pub const ADS_CMD_DEL_NOTIFICATION: u16 = 7;
+pub const ADS_CMD_NOTIFICATION: u16 = 8;
+pub const ADS_CMD_READ_WRITE: u16 = 9;
 pub const ADS_STATE_REQUEST: u16 = 0x0004;
 pub const ADS_STATE_RESPONSE: u16 = 0x0005;
 

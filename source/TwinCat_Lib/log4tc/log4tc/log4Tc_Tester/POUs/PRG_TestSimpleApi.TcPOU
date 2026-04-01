@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.0">
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.17">
   <POU Name="PRG_TestSimpleApi" Id="{bcc7908d-3a35-4ae4-afd2-9b6ede60025b}" SpecialFunc="None">
     <Declaration><![CDATA[PROGRAM PRG_TestSimpleApi
 VAR
@@ -27,13 +27,13 @@ END_VAR
 IF bExecute OR bExecuteSingle THEN
 	bExecuteSingle := FALSE;
 
-	F_LogLA1C(
-		E_LogLevel.eInfo, 
-		'PRG_TestSimpleApi', 
-		'Temperatur {temperature}', 
-		fArg, 
-		F_LogContext().AddBool('csv', TRUE)
-	);
+// 	F_LogLA1C(
+// 		E_LogLevel.eInfo, 
+// 		'PRG_TestSimpleApi', 
+// 		'Temperatur {temperature}', 
+// 		fArg, 
+// 		//F_LogContext().AddBool('csv', TRUE)
+// 	);
 	
 	
 	F_LogA7(

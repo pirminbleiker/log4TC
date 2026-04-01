@@ -44,42 +44,48 @@ impl MessageFormatter {
         result
     }
 
-    /// Format a message with both positional and named arguments
+    /// Format a message with both positional and named arguments.
+    /// Named placeholders like {time} are matched to arguments by order of appearance
+    /// (Serilog/MessageTemplates style): first placeholder → arg[0], second → arg[1], etc.
+    /// Numeric placeholders like {0}, {1} are matched by index directly.
     pub fn format_with_context(
         template: &str,
         arguments: &HashMap<usize, serde_json::Value>,
         context: &HashMap<String, serde_json::Value>,
     ) -> String {
-        // Fast path: no placeholders
         if !template.contains('{') {
             return template.to_string();
         }
 
         let re = Regex::new(r"\{([^}]+)\}").expect("regex should compile");
         let mut result = template.to_string();
-
-        // Collect replacements for positional and named arguments
-        let mut replacements = Vec::with_capacity(arguments.len() + context.len());
+        let mut replacements = Vec::new();
+        let mut positional_index: usize = 0; // tracks which arg to use for named placeholders
 
         for cap in re.captures_iter(template) {
             let key = &cap[1];
+            let placeholder = cap[0].to_string();
 
-            // Try to parse as positional index first
             if let Ok(index) = key.parse::<usize>() {
+                // Numeric placeholder {0}, {1} → direct index lookup
                 if let Some(value) = arguments.get(&index) {
-                    let placeholder = &cap[0];
-                    let value_str = Self::value_to_string(value);
-                    replacements.push((placeholder.to_string(), value_str));
+                    replacements.push((placeholder, Self::value_to_string(value)));
                 }
-            } else if let Some(value) = context.get(key) {
-                // Fall back to named argument lookup
-                let placeholder = &cap[0];
-                let value_str = Self::value_to_string(value);
-                replacements.push((placeholder.to_string(), value_str));
+                positional_index += 1;
+            } else {
+                // Named placeholder {time}, {name} → match by order of appearance
+                // PLC uses 1-based arg indices, so first named placeholder = arg[1]
+                let arg_index = positional_index + 1;
+                if let Some(value) = arguments.get(&arg_index) {
+                    replacements.push((placeholder, Self::value_to_string(value)));
+                } else if let Some(value) = context.get(key) {
+                    // Fallback: try context by name
+                    replacements.push((placeholder, Self::value_to_string(value)));
+                }
+                positional_index += 1;
             }
         }
 
-        // Apply replacements
         for (placeholder, replacement) in replacements {
             result = result.replace(&placeholder, &replacement);
         }

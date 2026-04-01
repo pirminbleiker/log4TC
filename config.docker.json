@@ -1,30 +1,25 @@
 {
   "logging": {
-    "logLevel": "info",
-    "format": "json",
-    "outputPath": "stdout"
+    "log_level": "debug",
+    "format": "text",
+    "output_path": null
   },
   "receiver": {
     "host": "0.0.0.0",
-    "httpPort": 4318,
-    "grpcPort": 4317,
-    "maxBodySize": 4194304,
-    "requestTimeoutSecs": 30,
-    "amsNetId": "172.17.0.2.1.1",
-    "amsTcpPort": 48898,
-    "adsPort": 16150
+    "http_port": 4318,
+    "grpc_port": 4317,
+    "max_body_size": 4194304,
+    "request_timeout_secs": 30,
+    "ams_net_id": "172.25.160.1.1.1",
+    "ams_tcp_port": 48898,
+    "ads_port": 16150
   },
-  "outputs": [
-    {
-      "Type": "nlog",
-      "ConfigFile": "nlog.config"
-    }
-  ],
+  "outputs": [],
   "service": {
     "name": "Log4TcService",
-    "displayName": "Log4TC Logging Service",
-    "workerThreads": null,
-    "channelCapacity": 10000,
-    "shutdownTimeoutSecs": 30
+    "display_name": "Log4TC Logging Service",
+    "worker_threads": null,
+    "channel_capacity": 10000,
+    "shutdown_timeout_secs": 30
   }
 }

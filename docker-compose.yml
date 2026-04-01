@@ -17,9 +17,9 @@ services:
       dockerfile: Dockerfile
     container_name: log4tc-service
     ports:
-      - "48898:48898"  # AMS/TCP (ADS via AMS routing from PLC)
-      - "16150:16150"  # Legacy ADS listener (direct TCP)
-      - "4318:4318"    # OTEL HTTP (optional, for testing)
+      - "48898:48898/tcp"  # AMS/TCP (ADS via AMS routing from PLC)
+      - "48899:48899/udp"  # ADS UDP route discovery
+      - "16150:16150/tcp"  # Legacy ADS listener (direct TCP)
     environment:
       - LOG4TC_CONFIG=/etc/log4tc/config.json
       - RUST_LOG=log4tc_service=debug,log4tc_ads=debug

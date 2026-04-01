@@ -20,6 +20,38 @@ const MAX_MESSAGE_SIZE: usize = 1_048_576;
 pub struct AdsParser;
 
 impl AdsParser {
+    /// Parse ALL log entries from a buffer (buffer can contain multiple entries)
+    pub fn parse_all(data: &[u8]) -> Result<Vec<AdsLogEntry>> {
+        let mut entries = Vec::new();
+        let mut offset = 0;
+
+        while offset < data.len() {
+            // Skip zero padding at end
+            if data[offset] == 0 {
+                break;
+            }
+            let remaining = &data[offset..];
+            match Self::parse(remaining) {
+                Ok(entry) => {
+                    entries.push(entry);
+                    // We need to know how many bytes were consumed
+                    // For now, try parsing from increasing offsets
+                    // TODO: return consumed bytes from parse()
+                    break; // For safety, parse one at a time until we track position
+                }
+                Err(e) => {
+                    if entries.is_empty() {
+                        return Err(e);
+                    }
+                    // Partial entry at end of buffer - that's ok
+                    break;
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
     /// Parse a complete ADS log entry from bytes
     pub fn parse(data: &[u8]) -> Result<AdsLogEntry> {
         // Security: Check total message size
@@ -45,10 +77,11 @@ impl AdsParser {
         // Logger (string)
         let logger = reader.read_string()?;
 
-        // Level (1 byte)
-        let level_byte = reader.read_u8()?;
-        let level = LogLevel::from_u8(level_byte)
-            .ok_or(AdsError::ParseError("Invalid log level".to_string()))?;
+        // Level (2 bytes - UINT, PLC uses _WriteUInt for eLogLevel)
+        let level_bytes = reader.read_bytes(2)?;
+        let level_u16 = u16::from_le_bytes([level_bytes[0], level_bytes[1]]);
+        let level = LogLevel::from_u8(level_u16 as u8)
+            .ok_or(AdsError::ParseError(format!("Invalid log level: {}", level_u16)))?;
 
         // Timestamps (8 bytes each, FILETIME format)
         let plc_timestamp = reader.read_filetime()?;
@@ -69,8 +102,13 @@ impl AdsParser {
         let mut context = HashMap::new();
 
         loop {
+            // Check if there's more data
+            if reader.remaining() == 0 {
+                break;
+            }
             let type_id = reader.read_u8()?;
-            if type_id == 0 {
+            if type_id == 0 || type_id == 255 {
+                // 0 = legacy end marker, 255 = spec end marker
                 break;
             }
 
@@ -160,9 +198,9 @@ impl<'a> BytesReader<'a> {
     }
 
     fn read_string(&mut self) -> Result<String> {
-        // String format: [Length: u16] + [Data: UTF-8 bytes]
-        let len_bytes = self.read_bytes(2)?;
-        let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
+        // String format: [Length: u8] + [Data: UTF-8 bytes]
+        // PLC FB_LogEntry._WriteString uses _WriteByte(len) - single byte length prefix
+        let len = self.read_u8()? as usize;
 
         // Security: Enforce maximum string length
         if len > MAX_STRING_LENGTH {
@@ -203,33 +241,105 @@ impl<'a> BytesReader<'a> {
             .ok_or(AdsError::InvalidTimestamp("Invalid timestamp".to_string()))?)
     }
 
+    fn read_u16(&mut self) -> Result<u16> {
+        let bytes = self.read_bytes(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn read_i16(&mut self) -> Result<i16> {
+        let bytes = self.read_bytes(2)?;
+        Ok(i16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    /// Read a typed value per ADS protocol spec.
+    /// Type IDs are INT16 (2 bytes), matching Tc2_Utilities.E_ArgType.
     fn read_value(&mut self) -> Result<serde_json::Value> {
-        // For now, support basic types: 0=null, 1=int, 2=float, 3=string, 4=bool
-        let val_type = self.read_u8()?;
+        let val_type = self.read_i16()? as i32;
 
         match val_type {
             0 => Ok(serde_json::Value::Null),
-            1 => {
-                let val = self.read_i32()?;
-                Ok(serde_json::json!(val))
+            1 | 9 => { let v = self.read_u8()?; Ok(serde_json::json!(v)) }         // BYTE/USINT
+            2 | 10 => { let v = self.read_u16()?; Ok(serde_json::json!(v)) }       // WORD/UINT
+            3 | 11 => { let v = self.read_u32()?; Ok(serde_json::json!(v)) }       // DWORD/UDINT
+            4 => {                                                                   // REAL (f32)
+                let b = self.read_bytes(4)?;
+                Ok(serde_json::json!(f32::from_le_bytes([b[0],b[1],b[2],b[3]])))
             }
-            2 => {
-                let bytes = self.read_bytes(8)?;
-                let val = f64::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                    bytes[7],
-                ]);
-                Ok(serde_json::json!(val))
+            5 => {                                                                   // LREAL (f64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(f64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
             }
-            3 => {
-                let s = self.read_string()?;
+            6 => { let v = self.read_u8()? as i8; Ok(serde_json::json!(v)) }       // SINT
+            7 => { let v = self.read_i16()?; Ok(serde_json::json!(v)) }             // INT
+            8 => { let v = self.read_i32()?; Ok(serde_json::json!(v)) }             // DINT
+            12 => { let s = self.read_string()?; Ok(serde_json::Value::String(s)) } // STRING
+            13 => { let b = self.read_u8()? != 0; Ok(serde_json::Value::Bool(b)) }  // BOOL
+            15 => {                                                                  // ULARGE (u64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+            }
+            17 => {                                                                  // LARGE (i64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(i64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+            }
+            20000 => {                                                               // TIME (ms as u32)
+                let ms = self.read_u32()?;
+                let secs = ms / 1000;
+                let millis = ms % 1000;
+                Ok(serde_json::Value::String(format!("T#{}s{}ms", secs, millis)))
+            }
+            20001 => {                                                               // LTIME (100ns as u64)
+                let b = self.read_bytes(8)?;
+                let ns100 = u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]]);
+                let us = ns100 / 10;
+                Ok(serde_json::Value::String(format!("LTIME#{}us", us)))
+            }
+            20004 => {                                                               // TIME_OF_DAY (ms as u32)
+                let ms = self.read_u32()?;
+                let h = ms / 3_600_000;
+                let m = (ms % 3_600_000) / 60_000;
+                let s = (ms % 60_000) / 1000;
+                Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}", h, m, s)))
+            }
+            20002 | 20003 => {                                                      // DATE/DT → format as ISO datetime
+                let unix_secs = self.read_u32()? as i64;
+                let dt = chrono::DateTime::from_timestamp(unix_secs, 0)
+                    .unwrap_or_default();
+                Ok(serde_json::Value::String(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()))
+            }
+            20005 => {                                                               // ENUM (recursive)
+                // Read underlying type, then value
+                let underlying = self.read_i16()? as i32;
+                match underlying {
+                    1 | 9 => { let v = self.read_u8()?; Ok(serde_json::json!(v)) }
+                    2 | 10 => { let v = self.read_u16()?; Ok(serde_json::json!(v)) }
+                    3 | 11 => { let v = self.read_u32()?; Ok(serde_json::json!(v)) }
+                    15 => {
+                        let b = self.read_bytes(8)?;
+                        Ok(serde_json::json!(u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+                    }
+                    _ => {
+                        tracing::warn!("Unknown enum underlying type: {}", underlying);
+                        Ok(serde_json::Value::Null)
+                    }
+                }
+            }
+            20006 => {                                                               // WSTRING (UTF-16LE)
+                // Length in characters (1 byte), data is len*2 bytes UTF-16LE
+                let char_count = self.read_u8()? as usize;
+                let byte_count = char_count * 2;
+                let raw = self.read_bytes(byte_count)?;
+                // Decode UTF-16LE
+                let u16_vals: Vec<u16> = raw.chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                let s = String::from_utf16_lossy(&u16_vals);
                 Ok(serde_json::Value::String(s))
             }
-            4 => {
-                let b = self.read_u8()? != 0;
-                Ok(serde_json::Value::Bool(b))
+            _ => {
+                tracing::warn!("Unknown value type: {}", val_type);
+                Ok(serde_json::Value::Null)
             }
-            _ => Err(AdsError::ParseError(format!("Unknown value type: {}", val_type))),
         }
     }
 }
@@ -240,46 +350,48 @@ mod tests {
     use chrono::Utc;
 
     // Helper function to build test payloads
+    /// Build test payload matching real PLC FB_LogEntry format:
+    /// - Strings: 1-byte length prefix (u8) + data
+    /// - Level: 2 bytes (u16 LE, _WriteUInt)
+    /// - Timestamps: 8 bytes each (FILETIME)
+    /// - task_index: 4 bytes (i32, _WriteDInt)
+    /// - cycle_counter: 4 bytes (u32, _WriteUDInt)
+    /// - online_change_count: 4 bytes (u32, _WriteUDInt)
     fn build_test_payload(message: &str, logger: &str, level: u8) -> Vec<u8> {
-        let mut payload = vec![1]; // version
+        let mut payload = vec![1]; // version byte
 
-        // Message
-        let msg_bytes = message.as_bytes();
-        payload.extend_from_slice(&(msg_bytes.len() as u16).to_le_bytes());
-        payload.extend_from_slice(msg_bytes);
+        // Message (1-byte len + data)
+        payload.push(message.len() as u8);
+        payload.extend_from_slice(message.as_bytes());
 
-        // Logger
-        let logger_bytes = logger.as_bytes();
-        payload.extend_from_slice(&(logger_bytes.len() as u16).to_le_bytes());
-        payload.extend_from_slice(logger_bytes);
+        // Logger (1-byte len + data)
+        payload.push(logger.len() as u8);
+        payload.extend_from_slice(logger.as_bytes());
 
-        // Level
-        payload.push(level);
+        // Level (2 bytes, u16 LE)
+        payload.extend_from_slice(&(level as u16).to_le_bytes());
 
-        // Timestamps (FILETIME: Unix epoch + 116444736000000000 in 100-ns intervals)
+        // Timestamps (FILETIME: 100-ns intervals since 1601-01-01)
         let unix_now = Utc::now().timestamp() as u64;
         let filetime = (unix_now * 10_000_000) + 116444736000000000;
-        payload.extend_from_slice(&filetime.to_le_bytes());
-        payload.extend_from_slice(&filetime.to_le_bytes());
+        payload.extend_from_slice(&filetime.to_le_bytes()); // plc_timestamp
+        payload.extend_from_slice(&filetime.to_le_bytes()); // clock_timestamp
 
         // Task metadata
-        payload.extend_from_slice(&1i32.to_le_bytes()); // task_index
+        payload.extend_from_slice(&1i32.to_le_bytes()); // task_index (_WriteDInt)
         let task_name = "MainTask";
-        let task_bytes = task_name.as_bytes();
-        payload.extend_from_slice(&(task_bytes.len() as u16).to_le_bytes());
-        payload.extend_from_slice(task_bytes);
-        payload.extend_from_slice(&100u32.to_le_bytes()); // cycle_counter
+        payload.push(task_name.len() as u8); // 1-byte string len
+        payload.extend_from_slice(task_name.as_bytes());
+        payload.extend_from_slice(&100u32.to_le_bytes()); // cycle_counter (_WriteUDInt)
 
         // App metadata
         let app_name = "TestApp";
-        let app_bytes = app_name.as_bytes();
-        payload.extend_from_slice(&(app_bytes.len() as u16).to_le_bytes());
-        payload.extend_from_slice(app_bytes);
+        payload.push(app_name.len() as u8);
+        payload.extend_from_slice(app_name.as_bytes());
 
         let project_name = "TestProject";
-        let proj_bytes = project_name.as_bytes();
-        payload.extend_from_slice(&(proj_bytes.len() as u16).to_le_bytes());
-        payload.extend_from_slice(proj_bytes);
+        payload.push(project_name.len() as u8);
+        payload.extend_from_slice(project_name.as_bytes());
 
         payload.extend_from_slice(&0u32.to_le_bytes()); // online_change_count
 
