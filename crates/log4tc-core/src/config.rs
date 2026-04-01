@@ -8,6 +8,8 @@ use std::path::PathBuf;
 pub struct AppSettings {
     pub logging: LoggingConfig,
     pub receiver: ReceiverConfig,
+    #[serde(default)]
+    pub export: ExportConfig,
     pub outputs: Vec<OutputConfig>,
     pub service: ServiceConfig,
 }
@@ -87,6 +89,44 @@ pub struct OutputConfig {
     pub settings: serde_json::Value,
 }
 
+/// Export configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfig {
+    /// Export endpoint URL (e.g. "http://victoria-logs:9428/insert/jsonline")
+    #[serde(default = "default_export_endpoint")]
+    pub endpoint: String,
+    /// Batch size - flush after this many records
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// Flush interval in milliseconds
+    #[serde(default = "default_flush_interval_ms")]
+    pub flush_interval_ms: u64,
+    /// HTTP timeout in seconds
+    #[serde(default = "default_export_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Max retry attempts on failure
+    #[serde(default = "default_max_retries")]
+    pub max_retries: usize,
+}
+
+fn default_export_endpoint() -> String { "http://victoria-logs:9428/insert/jsonline".to_string() }
+fn default_batch_size() -> usize { 500 }
+fn default_flush_interval_ms() -> u64 { 1000 }
+fn default_export_timeout_secs() -> u64 { 10 }
+fn default_max_retries() -> usize { 3 }
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_export_endpoint(),
+            batch_size: default_batch_size(),
+            flush_interval_ms: default_flush_interval_ms(),
+            timeout_secs: default_export_timeout_secs(),
+            max_retries: default_max_retries(),
+        }
+    }
+}
+
 /// Service configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
@@ -107,7 +147,7 @@ impl Default for ServiceConfig {
         Self {
             name: "Log4TcService".to_string(),
             display_name: "Log4TC Logging Service".to_string(),
-            worker_threads: None, // Use tokio default
+            worker_threads: None,
             channel_capacity: 10000,
             shutdown_timeout_secs: 30,
         }

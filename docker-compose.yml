@@ -7,14 +7,11 @@ services:
     ports:
       - "48898:48898/tcp"   # AMS/TCP (ADS from PLC)
       - "48899:48899/udp"   # ADS UDP route discovery
-      - "16150:16150/tcp"   # Legacy ADS listener
     environment:
       - LOG4TC_CONFIG=/etc/log4tc/config.json
       - RUST_LOG=log4tc_service=info,log4tc_ads=info
-      - LOG4TC_EXPORT_ENDPOINT=http://victoria-logs:9428/insert/jsonline
     volumes:
       - ./config.docker.json:/etc/log4tc/config.json:ro
-    command: ["--config", "/etc/log4tc/config.json", "--ads-port", "16150"]
     networks:
       - default
 

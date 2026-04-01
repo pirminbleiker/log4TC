@@ -10,8 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const DEFAULT_BATCH_SIZE: usize = 500;
-const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000;
+// Defaults moved to config.rs ExportConfig
 
 /// Log dispatcher - converts LogEntries and sends them to a batched export worker
 #[derive(Clone)]
@@ -21,11 +20,12 @@ pub struct LogDispatcher {
 
 impl LogDispatcher {
     pub async fn new(settings: &AppSettings) -> Result<Self> {
+        // ENV override for endpoint, otherwise use config
         let endpoint = std::env::var("LOG4TC_EXPORT_ENDPOINT")
-            .unwrap_or_else(|_| "http://victoria-logs:9428/insert/jsonline".to_string());
+            .unwrap_or_else(|_| settings.export.endpoint.clone());
 
-        let batch_size = DEFAULT_BATCH_SIZE;
-        let flush_interval = Duration::from_millis(DEFAULT_FLUSH_INTERVAL_MS);
+        let batch_size = settings.export.batch_size;
+        let flush_interval = Duration::from_millis(settings.export.flush_interval_ms);
 
         // Bounded channel for backpressure
         let (export_tx, export_rx) = mpsc::channel::<LogRecord>(settings.service.channel_capacity);

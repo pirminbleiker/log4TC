@@ -1,18 +1,25 @@
 {
   "logging": {
-    "log_level": "debug",
+    "log_level": "info",
     "format": "text",
     "output_path": null
   },
   "receiver": {
     "host": "0.0.0.0",
+    "ams_net_id": "172.25.160.1.1.1",
+    "ams_tcp_port": 48898,
+    "ads_port": 16150,
     "http_port": 4318,
     "grpc_port": 4317,
     "max_body_size": 4194304,
-    "request_timeout_secs": 30,
-    "ams_net_id": "172.25.160.1.1.1",
-    "ams_tcp_port": 48898,
-    "ads_port": 16150
+    "request_timeout_secs": 30
+  },
+  "export": {
+    "endpoint": "http://victoria-logs:9428/insert/jsonline",
+    "batch_size": 500,
+    "flush_interval_ms": 1000,
+    "timeout_secs": 10,
+    "max_retries": 3
   },
   "outputs": [],
   "service": {

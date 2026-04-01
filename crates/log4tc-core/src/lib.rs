@@ -10,5 +10,5 @@ pub mod formatter;
 
 pub use models::{LogEntry, LogLevel, LogRecord};
 pub use error::{Result, Error};
-pub use config::{AppSettings, LoggingConfig, ReceiverConfig, OutputConfig, ServiceConfig, LogFormat};
+pub use config::{AppSettings, LoggingConfig, ReceiverConfig, ExportConfig, OutputConfig, ServiceConfig, LogFormat};
 pub use formatter::MessageFormatter;
