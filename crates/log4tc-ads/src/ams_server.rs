@@ -8,7 +8,7 @@ use crate::ams::{
     ADS_CMD_READ_STATE, ADS_CMD_WRITE,
 };
 use crate::parser::AdsParser;
-use log4tc_core::{LogEntry, MessageFormatter};
+use log4tc_core::LogEntry;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -335,18 +335,6 @@ impl AmsTcpServer {
                                 log_entry.online_change_count = ads_entry.online_change_count;
                                 log_entry.arguments = ads_entry.arguments;
                                 log_entry.context = ads_entry.context;
-
-                                // Format message template with arguments
-                                let formatted = MessageFormatter::format_with_context(
-                                    &log_entry.message,
-                                    &log_entry.arguments,
-                                    &log_entry.context,
-                                );
-
-                                tracing::info!(
-                                    "LOG [{}] {} - {}",
-                                    log_entry.level, log_entry.logger, formatted
-                                );
 
                                 let _ = log_tx.send(log_entry).await;
                             }

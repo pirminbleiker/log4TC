@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const DEFAULT_BATCH_SIZE: usize = 100;
-const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
+const DEFAULT_BATCH_SIZE: usize = 500;
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000;
 
 /// Log dispatcher - converts LogEntries and sends them to a batched export worker
 #[derive(Clone)]
@@ -38,16 +38,17 @@ impl LogDispatcher {
         Ok(Self { export_tx })
     }
 
-    /// Dispatch a log entry - formats message and sends to export worker
+    /// Dispatch a log entry - formats and sends to export worker (non-blocking)
     pub async fn dispatch(&self, entry: LogEntry) -> Result<()> {
-        let formatted = MessageFormatter::format_with_context(
-            &entry.message,
-            &entry.arguments,
-            &entry.context,
-        );
+        // Format message only if template has placeholders
+        let body = if entry.message.contains('{') {
+            MessageFormatter::format_with_context(&entry.message, &entry.arguments, &entry.context)
+        } else {
+            entry.message.clone()
+        };
 
         let mut record = LogRecord::from_log_entry(entry);
-        record.body = serde_json::json!(formatted);
+        record.body = serde_json::Value::String(body);
 
         // Non-blocking send - drops if channel full (backpressure)
         if self.export_tx.try_send(record).is_err() {
