@@ -214,35 +214,52 @@ impl OtelExporter {
     }
 
     /// Build OTEL LogsData JSON payload
+    /// Convert a serde_json::Value to OTLP AnyValue format
+    fn to_otlp_value(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::String(s) => json!({"stringValue": s}),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    json!({"intValue": i.to_string()})
+                } else {
+                    json!({"doubleValue": n.as_f64().unwrap_or(0.0)})
+                }
+            }
+            serde_json::Value::Bool(b) => json!({"boolValue": b}),
+            _ => json!({"stringValue": v.to_string()}),
+        }
+    }
+
+    /// Convert HashMap to OTLP attributes array format
+    fn to_otlp_attributes(attrs: &std::collections::HashMap<String, serde_json::Value>) -> Vec<serde_json::Value> {
+        attrs.iter().map(|(k, v)| {
+            json!({"key": k, "value": Self::to_otlp_value(v)})
+        }).collect()
+    }
+
     fn build_otel_payload(&self, records: &[LogRecord]) -> Result<String> {
         let resource_logs = records
             .iter()
             .map(|record| {
                 json!({
                     "resource": {
-                        "attributes": record.resource_attributes.iter().map(|(k, v)| {
-                            (k.clone(), v.clone())
-                        }).collect::<serde_json::Map<String, serde_json::Value>>()
+                        "attributes": Self::to_otlp_attributes(&record.resource_attributes)
                     },
-                    "scope_logs": [
+                    "scopeLogs": [
                         {
                             "scope": {
                                 "name": "log4tc",
-                                "attributes": record.scope_attributes.iter().map(|(k, v)| {
-                                    (k.clone(), v.clone())
-                                }).collect::<serde_json::Map<String, serde_json::Value>>()
+                                "attributes": Self::to_otlp_attributes(&record.scope_attributes)
                             },
-                            "log_records": [
+                            "logRecords": [
                                 {
-                                    "time_unix_nano": (record.timestamp.timestamp_nanos_opt().unwrap_or(0) as u64),
+                                    "timeUnixNano": format!("{}", record.timestamp.timestamp_nanos_opt().unwrap_or(0) as u64),
                                     "body": {
-                                        "string_value": record.body.as_str().unwrap_or("").to_string()
+                                        "stringValue": record.body.as_str().unwrap_or("")
                                     },
-                                    "severity_number": record.severity_number,
-                                    "severity_text": record.severity_text.clone(),
-                                    "attributes": record.log_attributes.iter().map(|(k, v)| {
-                                        (k.clone(), v.clone())
-                                    }).collect::<serde_json::Map<String, serde_json::Value>>()
+                                    "severityNumber": record.severity_number,
+                                    "severityText": record.severity_text.clone(),
+                                    "attributes": Self::to_otlp_attributes(&record.log_attributes)
                                 }
                             ]
                         }
@@ -252,7 +269,7 @@ impl OtelExporter {
             .collect::<Vec<_>>();
 
         let payload = json!({
-            "resource_logs": resource_logs
+            "resourceLogs": resource_logs
         });
 
         serde_json::to_string(&payload).map_err(|e| {
