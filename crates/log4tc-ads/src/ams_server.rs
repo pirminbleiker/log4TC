@@ -200,8 +200,13 @@ impl AmsTcpServer {
             } else if cmd == ADS_CMD_WRITE {
                 // Log data - full processing path
                 match Self::handle_frame(data, ads_port, peer_addr, &log_tx).await {
-                    Ok(response) => {
-                        if stream.write_all(&response).await.is_err() {
+                    Ok(ams_response) => {
+                        // Wrap in AMS/TCP header (6 bytes: reserved + length)
+                        let mut full_response = Vec::with_capacity(6 + ams_response.len());
+                        full_response.extend_from_slice(&0u16.to_le_bytes());
+                        full_response.extend_from_slice(&(ams_response.len() as u32).to_le_bytes());
+                        full_response.extend_from_slice(&ams_response);
+                        if stream.write_all(&full_response).await.is_err() {
                             break;
                         }
                     }
