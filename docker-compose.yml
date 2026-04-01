@@ -1,30 +1,24 @@
 services:
-  # OpenTelemetry Collector - receives OTLP from log4tc, exports to stdout
-  otel-collector:
-    image: otel/opentelemetry-collector:latest
-    container_name: otel-collector
-    ports:
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
-      - "13133:13133" # Health check
-    volumes:
-      - ./otel-collector-config.yml:/etc/otelcol/config.yaml:ro
-
-  # Log4TC Service - receives ADS from PLC, forwards to OTEL Collector
   log4tc-service:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: log4tc-service
     ports:
-      - "48898:48898/tcp"  # AMS/TCP (ADS via AMS routing from PLC)
-      - "48899:48899/udp"  # ADS UDP route discovery
-      - "16150:16150/tcp"  # Legacy ADS listener (direct TCP)
+      - "48898:48898/tcp"   # AMS/TCP (ADS from PLC)
+      - "48899:48899/udp"   # ADS UDP route discovery
+      - "16150:16150/tcp"   # Legacy ADS listener
     environment:
       - LOG4TC_CONFIG=/etc/log4tc/config.json
-      - RUST_LOG=log4tc_service=debug,log4tc_ads=debug
+      - RUST_LOG=log4tc_service=info,log4tc_ads=info
+      - LOG4TC_EXPORT_ENDPOINT=http://victoria-logs:9428/insert/jsonline
     volumes:
       - ./config.docker.json:/etc/log4tc/config.json:ro
-    depends_on:
-      - otel-collector
     command: ["--config", "/etc/log4tc/config.json", "--ads-port", "16150"]
+    networks:
+      - default
+
+networks:
+  default:
+    external: true
+    name: grafana_default

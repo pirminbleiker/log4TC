@@ -1,124 +1,174 @@
-//! Log dispatcher - routes logs to OTEL exporter and configured outputs
+//! Log dispatcher with batched async export to Victoria-Logs
+//!
+//! Logs are collected in a batch buffer and flushed either when the batch
+//! is full or after a timeout - whichever comes first. This minimizes
+//! HTTP overhead and CPU usage.
 
 use anyhow::Result;
 use log4tc_core::{AppSettings, LogEntry, LogRecord, MessageFormatter};
-use log4tc_otel::OtelExporter;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Duration;
+use tokio::sync::mpsc;
 
-/// Output plugin trait for implementing custom output handlers
-#[async_trait::async_trait]
-pub trait OutputPlugin: Send + Sync {
-    async fn handle(&self, record: LogRecord) -> Result<()>;
-    fn name(&self) -> &str;
-}
+const DEFAULT_BATCH_SIZE: usize = 100;
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
-/// OTEL export plugin - sends logs to collector via OTLP
-struct OtelOutputPlugin {
-    exporter: OtelExporter,
-}
-
-#[async_trait::async_trait]
-impl OutputPlugin for OtelOutputPlugin {
-    async fn handle(&self, record: LogRecord) -> Result<()> {
-        self.exporter.export(record).await
-            .map_err(|e| anyhow::anyhow!("OTEL export error: {}", e))
-    }
-
-    fn name(&self) -> &str {
-        "otel"
-    }
-}
-
-/// Console logging output plugin (for debugging)
-struct ConsoleLogOutput;
-
-#[async_trait::async_trait]
-impl OutputPlugin for ConsoleLogOutput {
-    async fn handle(&self, record: LogRecord) -> Result<()> {
-        tracing::info!(
-            "[{}] {} {}",
-            record.severity_text,
-            record.scope_attributes.get("logger.name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?"),
-            record.body
-        );
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "console"
-    }
-}
-
-/// Log dispatcher routes incoming logs to OTEL + configured outputs
+/// Log dispatcher - converts LogEntries and sends them to a batched export worker
 #[derive(Clone)]
 pub struct LogDispatcher {
-    outputs: Arc<RwLock<Vec<Arc<dyn OutputPlugin>>>>,
-    channel_capacity: usize,
+    export_tx: mpsc::Sender<LogRecord>,
 }
 
 impl LogDispatcher {
     pub async fn new(settings: &AppSettings) -> Result<Self> {
-        let mut outputs: Vec<Arc<dyn OutputPlugin>> = Vec::new();
+        let endpoint = std::env::var("LOG4TC_EXPORT_ENDPOINT")
+            .unwrap_or_else(|_| "http://victoria-logs:9428/insert/jsonline".to_string());
 
-        // Always add OTEL exporter
-        let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| "http://otel-collector:4318/v1/logs".to_string());
-        let exporter = OtelExporter::new(otel_endpoint, 100, 3);
-        outputs.push(Arc::new(OtelOutputPlugin { exporter }));
-        tracing::info!("OTEL exporter configured");
+        let batch_size = DEFAULT_BATCH_SIZE;
+        let flush_interval = Duration::from_millis(DEFAULT_FLUSH_INTERVAL_MS);
 
-        // Always add console output
-        outputs.push(Arc::new(ConsoleLogOutput));
+        // Bounded channel for backpressure
+        let (export_tx, export_rx) = mpsc::channel::<LogRecord>(settings.service.channel_capacity);
 
-        Ok(Self {
-            outputs: Arc::new(RwLock::new(outputs)),
-            channel_capacity: settings.service.channel_capacity,
-        })
+        // Spawn background batch worker
+        tokio::spawn(Self::batch_worker(export_rx, endpoint, batch_size, flush_interval));
+
+        tracing::info!("Dispatcher ready (batch={}, flush={}ms)", batch_size, flush_interval.as_millis());
+
+        Ok(Self { export_tx })
     }
 
-    /// Dispatch a log entry to all configured outputs
+    /// Dispatch a log entry - formats message and sends to export worker
     pub async fn dispatch(&self, entry: LogEntry) -> Result<()> {
-        tracing::trace!("Dispatching log entry: {}", entry.id);
-
-        // Format message with arguments
-        let formatted_message = MessageFormatter::format_with_context(
+        let formatted = MessageFormatter::format_with_context(
             &entry.message,
             &entry.arguments,
             &entry.context,
         );
 
-        // Convert to LogRecord for output plugins
         let mut record = LogRecord::from_log_entry(entry);
-        record.body = serde_json::json!(formatted_message);
+        record.body = serde_json::json!(formatted);
 
-        // Send to all configured outputs
-        let outputs = self.outputs.read().await;
-
-        // Collect errors but continue dispatching to all outputs
-        let mut errors = Vec::new();
-
-        for output in outputs.iter() {
-            if let Err(e) = output.handle(record.clone()).await {
-                tracing::error!("Output plugin {} error: {}", output.name(), e);
-                errors.push(e);
-            }
-        }
-
-        if !errors.is_empty() {
-            tracing::warn!(
-                "Dispatcher had {} errors while dispatching log",
-                errors.len()
-            );
+        // Non-blocking send - drops if channel full (backpressure)
+        if self.export_tx.try_send(record).is_err() {
+            tracing::warn!("Export channel full, dropping log");
         }
 
         Ok(())
     }
 
-    /// Get the current number of configured outputs
-    pub async fn output_count(&self) -> usize {
-        self.outputs.read().await.len()
+    /// Background worker that batches records and flushes to endpoint
+    async fn batch_worker(
+        mut rx: mpsc::Receiver<LogRecord>,
+        endpoint: String,
+        batch_size: usize,
+        flush_interval: Duration,
+    ) {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let mut batch: Vec<LogRecord> = Vec::with_capacity(batch_size);
+        let mut interval = tokio::time::interval(flush_interval);
+        let mut total_sent: u64 = 0;
+        let mut total_errors: u64 = 0;
+
+        loop {
+            tokio::select! {
+                // Receive new record
+                Some(record) = rx.recv() => {
+                    batch.push(record);
+                    if batch.len() >= batch_size {
+                        match Self::flush_batch(&client, &endpoint, &batch).await {
+                            Ok(n) => total_sent += n as u64,
+                            Err(e) => {
+                                total_errors += 1;
+                                tracing::error!("Batch export error: {}", e);
+                            }
+                        }
+                        batch.clear();
+                    }
+                }
+                // Periodic flush
+                _ = interval.tick() => {
+                    if !batch.is_empty() {
+                        match Self::flush_batch(&client, &endpoint, &batch).await {
+                            Ok(n) => total_sent += n as u64,
+                            Err(e) => {
+                                total_errors += 1;
+                                tracing::error!("Batch export error: {}", e);
+                            }
+                        }
+                        batch.clear();
+                    }
+                }
+                // Channel closed
+                else => {
+                    // Flush remaining
+                    if !batch.is_empty() {
+                        let _ = Self::flush_batch(&client, &endpoint, &batch).await;
+                    }
+                    tracing::info!("Export worker stopped. Total sent: {}, errors: {}", total_sent, total_errors);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Flush a batch of records to the endpoint as JSONL
+    async fn flush_batch(
+        client: &reqwest::Client,
+        endpoint: &str,
+        batch: &[LogRecord],
+    ) -> Result<usize> {
+        let count = batch.len();
+
+        // Build JSONL payload (one JSON object per line)
+        let mut payload = String::with_capacity(count * 256);
+        for record in batch {
+            let mut obj = serde_json::Map::new();
+
+            // Standard fields
+            obj.insert("_msg".to_string(), record.body.clone());
+            obj.insert("level".to_string(), serde_json::json!(record.severity_text.to_lowercase()));
+            obj.insert("severity_number".to_string(), serde_json::json!(record.severity_number));
+            obj.insert("timestamp".to_string(), serde_json::json!(record.timestamp.to_rfc3339()));
+
+            // Scope attributes (logger name)
+            for (k, v) in &record.scope_attributes {
+                obj.insert(k.clone(), v.clone());
+            }
+
+            // Resource attributes (service, host, task)
+            for (k, v) in &record.resource_attributes {
+                obj.insert(k.clone(), v.clone());
+            }
+
+            // Log attributes (context, args, plc metadata)
+            for (k, v) in &record.log_attributes {
+                obj.insert(k.clone(), v.clone());
+            }
+
+            payload.push_str(&serde_json::to_string(&serde_json::Value::Object(obj))?);
+            payload.push('\n');
+        }
+
+        let response = client
+            .post(endpoint)
+            .header("Content-Type", "application/stream+json")
+            .body(payload)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("HTTP error: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Export failed: HTTP {} - {}", status, body));
+        }
+
+        tracing::debug!("Exported {} logs to {}", count, endpoint);
+        Ok(count)
     }
 }
