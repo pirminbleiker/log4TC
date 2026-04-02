@@ -236,9 +236,8 @@ impl<'a> BytesReader<'a> {
         // Convert to Unix timestamp (1970-01-01)
         const FILETIME_EPOCH_DIFF: u64 = 116444736000000000; // 100-nanosecond intervals
         if filetime < FILETIME_EPOCH_DIFF {
-            return Err(AdsError::InvalidTimestamp(
-                "Timestamp before Unix epoch".to_string(),
-            ));
+            // PLC may send 0 if RTC not synced - use current time as fallback
+            return Ok(Utc::now());
         }
 
         let unix_time_100ns = filetime - FILETIME_EPOCH_DIFF;
