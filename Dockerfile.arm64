@@ -1,0 +1,17 @@
+# Build on x86 with cross-compilation to ARM64
+FROM rust:1.94 AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y gcc-aarch64-linux-gnu && rm -rf /var/lib/apt/lists/*
+RUN rustup target add aarch64-unknown-linux-gnu
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+COPY . .
+RUN cargo build --release --target aarch64-unknown-linux-gnu -p log4tc-service
+
+# ARM64 runtime image
+FROM arm64v8/debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/log4tc-service /usr/local/bin/
+COPY config.docker.json /etc/log4tc/config.json
+ENV LOG4TC_CONFIG=/etc/log4tc/config.json
+EXPOSE 48898
+ENTRYPOINT ["log4tc-service", "--config", "/etc/log4tc/config.json"]

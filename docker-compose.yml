@@ -9,7 +9,7 @@ services:
       - "48899:48899/udp"   # ADS UDP route discovery
     environment:
       - LOG4TC_CONFIG=/etc/log4tc/config.json
-      - RUST_LOG=log4tc_service=info,log4tc_ads=info
+      - RUST_LOG=log4tc_service=debug,log4tc_ads=debug
     volumes:
       - ./config.docker.json:/etc/log4tc/config.json:ro
     networks:

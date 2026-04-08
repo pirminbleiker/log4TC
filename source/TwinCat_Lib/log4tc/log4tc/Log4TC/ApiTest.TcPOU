@@ -10,39 +10,29 @@ END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[// Einfaches Logging
-F_LogLC(
-	E_LogLevel.eInfo,
-	'ApiTest',
-	'Log message',
-	0
-);
+F_Log(E_LogLevel.eInfo, 'Log message')
+	.WithLogger('ApiTest')
+	.CreateLog();
 
-F_LogL3(
-	E_LogLevel.eInfo,
-	Const.sGlobalLogger, 
-	'Log Message Arg={structuredArg} Arg={1} Arg=%s', 
-	F_StringEx('Arg 1'),
-	F_StringEx('Arg 2'),
-	F_StringEx('Arg 3')
-);
+F_Log(E_LogLevel.eInfo, 'Log Message Arg={structuredArg} Arg={1} Arg=%s')
+	.WithTArg(F_StringEx('Arg 1'))
+	.WithTArg(F_StringEx('Arg 2'))
+	.WithTArg(F_StringEx('Arg 3'))
+	.CreateLog();
 
-F_LogA3(
-	E_LogLevel.eError,
-	'Log Message Arg={structuredArg} Arg={1} Arg=%s',
-	nInt,
-	sStr,
-	fFloat
-);
+F_Log(E_LogLevel.eError, 'Log Message Arg={structuredArg} Arg={1} Arg=%s')
+	.WithAnyArg(nInt)
+	.WithAnyArg(sStr)
+	.WithAnyArg(fFloat)
+	.CreateLog();
 
 // Einfaches Logging mit expliziten Logger
-F_LogL3(
-	E_LogLevel.eInfo, 
-	'mbc4Log.Test',
-	'Log Message Arg={structuredArg} Arg={1} Arg=%s', 
-	F_StringEx('Arg 1'),
-	F_StringEx('Arg 2'),
-	F_StringEx('Arg 3')
-);
+F_Log(E_LogLevel.eInfo, 'Log Message Arg={structuredArg} Arg={1} Arg=%s')
+	.WithLogger('mbc4Log.Test')
+	.WithTArg(F_StringEx('Arg 1'))
+	.WithTArg(F_StringEx('Arg 2'))
+	.WithTArg(F_StringEx('Arg 3'))
+	.CreateLog();
 
 ]]></ST>
     </Implementation>

@@ -15,14 +15,15 @@
     <Implicit_KindOfTask>{d1a215c7-737a-4fba-bed2-2b0568fb69e5}</Implicit_KindOfTask>
     <Implicit_Jitter_Distribution>{84071a80-9789-41db-b27e-27e3ab204fa1}</Implicit_Jitter_Distribution>
     <LibraryReferences>{b74f17a3-49cb-46e0-b639-d8e1c2b0c59a}</LibraryReferences>
-    <Company>mbc engineering GmbH</Company>
+    <Company>AVM Engineering</Company>
     <Released>false</Released>
-    <Title>log4TC</Title>
-    <ProjectVersion>0.2.3</ProjectVersion>
+    <Title>log4tc</Title>
+    <ProjectVersion>0.2.4</ProjectVersion>
     <CompilerDefines>DEBUG</CompilerDefines>
     <DocFormat>reStructuredText</DocFormat>
-    <Author>mbc engineering GmbH</Author>
-    <Description>A library for logging in PLC code.</Description>
+    <Author>Pirmin Bleiker</Author>
+    <Description>
+    </Description>
     <LibraryCategories>
       <LibraryCategory xmlns="">
         <Id>{74d110c6-7213-4765-be2b-3ff0f1e344fb}</Id>
@@ -226,7 +227,7 @@
       <Id xmlns="">{d77c10e0-9dc6-46ed-bea1-c259418a1863}</Id>
     </SelectedLibraryCategories>
     <DefaultNamespace>log4tc</DefaultNamespace>
-    <Placeholder>log4TC</Placeholder>
+    <Placeholder>log4tc</Placeholder>
     <CompilerVersion>
     </CompilerVersion>
     <Licenses>
@@ -236,11 +237,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Folder Include="API" />
-    <Folder Include="API\Full" />
     <Folder Include="API\Context" />
-    <Folder Include="API\Simple" />
-    <Folder Include="API\Simple\Any" />
-    <Folder Include="API\Simple\TArg" />
     <Folder Include="GVLs" />
     <Folder Include="ITFs" />
     <Folder Include="DUTs" />
@@ -262,150 +259,25 @@
     <Compile Include="API\E_LogLevel.TcDUT">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="API\Full\FB_Logger.TcPOU">
+    <Compile Include="API\FB_Log.TcPOU">
       <SubType>Code</SubType>
-      <ExcludeFromBuild>true</ExcludeFromBuild>
     </Compile>
-    <Compile Include="API\Full\FB_LoggerLAC.TcPOU">
+    <Compile Include="API\F_Log.TcPOU">
       <SubType>Code</SubType>
-      <ExcludeFromBuild>false</ExcludeFromBuild>
+    </Compile>
+    <Compile Include="API\I_LogBuilder.TcIO">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="API\I_WithLogger.TcIO">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="API\I_WithContext.TcIO">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="API\I_Logger.TcIO">
+      <SubType>Code</SubType>
     </Compile>
     <Compile Include="API\PRG_TaskLog.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA5.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA4.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA7.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA6.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA9.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA3.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA2.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA10.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA8.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA10.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogA1.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA10C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA2C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA1C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA4C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA3C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA6C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA5C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA8C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA3.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA1.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA2.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA4.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA5.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA6.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA7.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA8.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA7C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA9.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\Any\F_LogLA9C.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\F_LogL.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\F_Log.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\F_LogLC.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\F_LogC.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\I_LogBuilder.TcIO">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL5.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL4.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL7.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL6.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL9.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL3.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL1.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL2.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL10.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="API\Simple\TArg\F_LogL8.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="DUTs\E_CustomTypes.TcDUT">
@@ -418,6 +290,12 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="DUTs\ST_ScopedContextStack.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="DUTs\E_TypeIdV2.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="DUTs\ST_LogEntryHeaderV2.TcDUT">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="GVLs\Config.TcGVL">
@@ -451,12 +329,6 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\F_InternalLog.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\F_LogA.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\F_LogTArg.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\PRG_ScopedContextStack.TcPOU">
@@ -500,62 +372,10 @@
     <PlaceholderReference Include="Tc2_System">
       <DefaultResolution>Tc2_System, * (Beckhoff Automation GmbH)</DefaultResolution>
       <Namespace>Tc2_System</Namespace>
-      <Parameters>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>TABLE_UPPER_BOUND</Key>
-          <Value>15</Value>
-        </Parameter>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>STRING_LENGTH_EXP</Key>
-          <Value>255</Value>
-        </Parameter>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>STRING_LENGTH_ADDRESS</Key>
-          <Value>20</Value>
-        </Parameter>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>STRING_LENGTH_COMMENT</Key>
-          <Value>255</Value>
-        </Parameter>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>STRING_LENGTH_OUTSTRING</Key>
-          <Value>255</Value>
-        </Parameter>
-        <Parameter ListName="PARAM" xmlns="">
-          <Key>TABLE_SHOW_VALID_ITEMS</Key>
-          <Value>FALSE</Value>
-        </Parameter>
-      </Parameters>
     </PlaceholderReference>
     <PlaceholderReference Include="Tc2_Utilities">
       <DefaultResolution>Tc2_Utilities, * (Beckhoff Automation GmbH)</DefaultResolution>
       <Namespace>Tc2_Utilities</Namespace>
-      <Parameters>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>NMAXLICENSES</Key>
-          <Value>50</Value>
-        </Parameter>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>NMAXLICENSEDEVICES</Key>
-          <Value>16</Value>
-        </Parameter>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>NMAXCPUCOUNT</Key>
-          <Value>64</Value>
-        </Parameter>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>CMAXCHARACTERS</Key>
-          <Value>16#FFFFFFF0</Value>
-        </Parameter>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>NMAXFILESONDONGLE</Key>
-          <Value>20</Value>
-        </Parameter>
-        <Parameter ListName="PARAMETERLIST" xmlns="">
-          <Key>CMAXCSVFIELDVALUESIZE</Key>
-          <Value>255</Value>
-        </Parameter>
-      </Parameters>
     </PlaceholderReference>
     <PlaceholderReference Include="Tc3_Module">
       <DefaultResolution>Tc3_Module, * (Beckhoff Automation GmbH)</DefaultResolution>
@@ -566,44 +386,6 @@
       <Namespace>TcUnit</Namespace>
       <HideWhenReferencedAsDependency>true</HideWhenReferencedAsDependency>
       <Optional>true</Optional>
-      <Parameters>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>MAXNUMBEROFTESTSUITES</Key>
-          <Value>1000</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>MAXNUMBEROFTESTSFOREACHTESTSUITE</Key>
-          <Value>100</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>MAXNUMBEROFASSERTSFOREACHTESTSUITE</Key>
-          <Value>1000</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>LOGEXTENDEDRESULTS</Key>
-          <Value>TRUE</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>XUNITENABLEPUBLISH</Key>
-          <Value>FALSE</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>XUNITBUFFERSIZE</Key>
-          <Value>65535</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>XUNITFILEPATH</Key>
-          <Value>'%TC_BOOTPRJPATH%tcunit_xunit_testresults.xml'</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>ADSLOGMESSAGEFIFORINGBUFFERSIZE</Key>
-          <Value>2000</Value>
-        </Parameter>
-        <Parameter ListName="GVL_PARAM_TCUNIT" xmlns="">
-          <Key>TIMEBETWEENTESTSUITESEXECUTION</Key>
-          <Value>TIME#0ms</Value>
-        </Parameter>
-      </Parameters>
     </PlaceholderReference>
   </ItemGroup>
   <ItemGroup>
@@ -645,16 +427,25 @@
           <d n="SubKeys" t="Hashtable" />
           <d n="Values" t="Hashtable" />
         </o>
-        <v>{8F99A816-E488-41E4-9FA3-846536012284}</v>
+        <v>{246001F4-279D-43AC-B241-948EB31120E1}</v>
         <o>
-          <v n="Name">"{8F99A816-E488-41E4-9FA3-846536012284}"</v>
+          <v n="Name">"{246001F4-279D-43AC-B241-948EB31120E1}"</v>
           <d n="SubKeys" t="Hashtable" />
-          <d n="Values" t="Hashtable" />
+          <d n="Values" t="Hashtable" ckt="String" cvt="String">
+            <v>GlobalVisuImageFilePath</v>
+            <v>%APPLICATIONPATH%</v>
+          </d>
         </o>
         <v>{29BD8D0C-3586-4548-BB48-497B9A01693F}</v>
         <o>
           <v n="Name">"{29BD8D0C-3586-4548-BB48-497B9A01693F}"</v>
           <d n="SubKeys" t="Hashtable" ckt="String" cvt="OptionKey">
+            <v>NamingConventions</v>
+            <o>
+              <v n="Name">"NamingConventions"</v>
+              <d n="SubKeys" t="Hashtable" />
+              <d n="Values" t="Hashtable" />
+            </o>
             <v>Rules</v>
             <o>
               <v n="Name">"Rules"</v>
@@ -662,33 +453,6 @@
                 <v>167</v>
                 <o>
                   <v n="Name">"167"</v>
-                  <d n="SubKeys" t="Hashtable" />
-                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
-                    <v>bActive</v>
-                    <v>False</v>
-                  </d>
-                </o>
-                <v>4</v>
-                <o>
-                  <v n="Name">"4"</v>
-                  <d n="SubKeys" t="Hashtable" />
-                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
-                    <v>bActive</v>
-                    <v>False</v>
-                  </d>
-                </o>
-                <v>33</v>
-                <o>
-                  <v n="Name">"33"</v>
-                  <d n="SubKeys" t="Hashtable" />
-                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
-                    <v>bActive</v>
-                    <v>False</v>
-                  </d>
-                </o>
-                <v>6</v>
-                <o>
-                  <v n="Name">"6"</v>
                   <d n="SubKeys" t="Hashtable" />
                   <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
                     <v>bActive</v>
@@ -707,6 +471,33 @@
                 <v>28</v>
                 <o>
                   <v n="Name">"28"</v>
+                  <d n="SubKeys" t="Hashtable" />
+                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
+                    <v>bActive</v>
+                    <v>False</v>
+                  </d>
+                </o>
+                <v>33</v>
+                <o>
+                  <v n="Name">"33"</v>
+                  <d n="SubKeys" t="Hashtable" />
+                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
+                    <v>bActive</v>
+                    <v>False</v>
+                  </d>
+                </o>
+                <v>4</v>
+                <o>
+                  <v n="Name">"4"</v>
+                  <d n="SubKeys" t="Hashtable" />
+                  <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
+                    <v>bActive</v>
+                    <v>False</v>
+                  </d>
+                </o>
+                <v>6</v>
+                <o>
+                  <v n="Name">"6"</v>
                   <d n="SubKeys" t="Hashtable" />
                   <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
                     <v>bActive</v>
@@ -737,20 +528,32 @@
             <o />
           </d>
         </o>
+        <v>{8A0FB252-96EB-4DCC-A5B4-B4804D05E2D6}</v>
+        <o>
+          <v n="Name">"{8A0FB252-96EB-4DCC-A5B4-B4804D05E2D6}"</v>
+          <d n="SubKeys" t="Hashtable" />
+          <d n="Values" t="Hashtable" ckt="String" cvt="Boolean">
+            <v>WriteLineIDs</v>
+            <v>True</v>
+          </d>
+        </o>
+        <v>{8F99A816-E488-41E4-9FA3-846536012284}</v>
+        <o>
+          <v n="Name">"{8F99A816-E488-41E4-9FA3-846536012284}"</v>
+          <d n="SubKeys" t="Hashtable" />
+          <d n="Values" t="Hashtable" />
+        </o>
+        <v>{eeeeeeee-3909-4298-8022-501ac3238667}</v>
+        <o>
+          <v n="Name">"{eeeeeeee-3909-4298-8022-501ac3238667}"</v>
+          <d n="SubKeys" t="Hashtable" />
+          <d n="Values" t="Hashtable" />
+        </o>
         <v>{F66C7017-BDD8-4114-926C-81D6D687E35F}</v>
         <o>
           <v n="Name">"{F66C7017-BDD8-4114-926C-81D6D687E35F}"</v>
           <d n="SubKeys" t="Hashtable" />
           <d n="Values" t="Hashtable" />
-        </o>
-        <v>{246001F4-279D-43AC-B241-948EB31120E1}</v>
-        <o>
-          <v n="Name">"{246001F4-279D-43AC-B241-948EB31120E1}"</v>
-          <d n="SubKeys" t="Hashtable" />
-          <d n="Values" t="Hashtable" ckt="String" cvt="String">
-            <v>GlobalVisuImageFilePath</v>
-            <v>%APPLICATIONPATH%</v>
-          </d>
         </o>
       </d>
       <d n="Values" t="Hashtable" />

@@ -1,19 +1,19 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.13">
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.17">
   <POU Name="PRG_Test" Id="{e5eebc94-2583-419e-a5ae-15055f39621e}" SpecialFunc="None">
     <Declaration><![CDATA[PROGRAM INTERNAL PRG_Test
 VAR
 	fbContextBuilder_Test	: FB_ContextBuilder_Test;
-	
-	fbLog			: FB_LoggerLAC(Const.sLoggerFromInstance);
-	
+
+	fbLog			: FB_Log;
+
 	fbScope			: FB_ScopedContext;
 	bLog			: BOOL;
 	bArg1			: BOOL;
 	nArg2			: INT;
 	sArg3			: STRING;
-	
-	
+
+
 END_VAR
 ]]></Declaration>
     <Implementation>
@@ -22,22 +22,23 @@ END_VAR
 IF _TaskInfo[GETCURTASKINDEXEX()].FirstCycle THEN
 	// For Remote Log4TC Server change the AMS net ID and configure a route
 	PRG_TaskLog.Init('127.0.0.1.1.1');
-	F_Log(E_LogLevel.eInfo, 'SPS Task gestartet.');
+	F_Log(E_LogLevel.eInfo, 'SPS Task gestartet.').CreateLog();
 END_IF
 
 fbLog.LoggerContext.AddInt('logger', 42);
 
 IF bLog THEN
 	bLog := FALSE;
-	F_Log(E_LogLevel.eDebug, 'Foobar'); 
-	F_LogA3(E_LogLevel.eInfo, '{0}, {1}, {2}', bArg1, nArg2, sArg3);
+	F_Log(E_LogLevel.eDebug, 'Foobar').CreateLog();
+	F_Log(E_LogLevel.eInfo, '{0}, {1}, {2}')
+		.WithAnyArg(bArg1)
+		.WithAnyArg(nArg2)
+		.WithAnyArg(sArg3)
+		.CreateLog();
 
-	fbLog(
-		eLogLevel 		:= E_LogLevel.eInfo,
-		sMessage 		:= 'barbaz {bLog}',
-		aArg1 			:= bLog,
-		iContextBuilder := F_Context().AddString('inmessage', 'foo')
-	);
+	fbLog.Info('barbaz {bLog}')
+		.WithAnyArg(bLog)
+		.CreateLog();
 END_IF
 
 PRG_TaskLog.Call();

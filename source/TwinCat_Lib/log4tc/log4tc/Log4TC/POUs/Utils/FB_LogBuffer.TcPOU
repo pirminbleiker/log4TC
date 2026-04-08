@@ -1,18 +1,18 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.13">
   <POU Name="FB_LogBuffer" Id="{375f315b-e151-40c4-ad95-8fb8cec0ccad}" SpecialFunc="None">
     <Declaration><![CDATA[{attribute 'no_explicit_call' := 'no direct call necessary'}
 FUNCTION_BLOCK INTERNAL FB_LogBuffer
 VAR
 	aBuffer			: ARRAY[1..Config.nBufferLen] OF BYTE;
-	nBufferCount	: UINT;
+	nBufferCount	: UDINT;
 END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[]]></ST>
     </Implementation>
     <Property Name="BufferFree" Id="{45c9af0f-ff7c-42cc-93eb-82c692517d9b}">
-      <Declaration><![CDATA[PROPERTY INTERNAL BufferFree : UINT]]></Declaration>
+      <Declaration><![CDATA[PROPERTY INTERNAL BufferFree : UDINT]]></Declaration>
       <Get Name="Get" Id="{f884c224-1ef7-4d9a-9843-b61796638b0f}">
         <Declaration><![CDATA[VAR
 END_VAR
@@ -48,7 +48,7 @@ END_VAR
       </Get>
     </Property>
     <Property Name="BufferUsed" Id="{a265c908-eb73-472e-a899-cc1e6ac8f30d}">
-      <Declaration><![CDATA[PROPERTY INTERNAL BufferUsed : UINT]]></Declaration>
+      <Declaration><![CDATA[PROPERTY INTERNAL BufferUsed : UDINT]]></Declaration>
       <Get Name="Get" Id="{7c3e34ab-7868-4e36-8ebb-ac277fe8a4d9}">
         <Declaration><![CDATA[VAR
 END_VAR
@@ -67,9 +67,9 @@ END_VAR
       </Implementation>
     </Method>
     <Method Name="DataAdded" Id="{b2b25665-2c5a-4e95-8b14-cabec40da64f}">
-      <Declaration><![CDATA[METHOD INTERNAL DataAdded 
+      <Declaration><![CDATA[METHOD INTERNAL DataAdded
 VAR_INPUT
-	nNewData		: UINT;
+	nNewData		: UDINT;
 END_VAR
 ]]></Declaration>
       <Implementation>

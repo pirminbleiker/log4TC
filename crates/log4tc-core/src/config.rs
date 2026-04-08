@@ -110,7 +110,7 @@ pub struct ExportConfig {
 }
 
 fn default_export_endpoint() -> String { "http://victoria-logs:9428/insert/jsonline".to_string() }
-fn default_batch_size() -> usize { 500 }
+fn default_batch_size() -> usize { 2000 }
 fn default_flush_interval_ms() -> u64 { 1000 }
 fn default_export_timeout_secs() -> u64 { 10 }
 fn default_max_retries() -> usize { 3 }
@@ -148,7 +148,7 @@ impl Default for ServiceConfig {
             name: "Log4TcService".to_string(),
             display_name: "Log4TC Logging Service".to_string(),
             worker_threads: None,
-            channel_capacity: 10000,
+            channel_capacity: 50000,
             shutdown_timeout_secs: 30,
         }
     }

@@ -11,10 +11,10 @@ END_VAR
       <ST><![CDATA[{noflow}
 IF (index < lower) THEN
 	CheckBounds := lower;
-	F_LogLA3(E_LogLevel.eFatal, 'CheckBounds', 'Check bounds exception: {index} {lower} {upper}', index, lower, upper);
+	F_Log(E_LogLevel.eFatal, 'Check bounds exception: {index} {lower} {upper}').WithLogger('CheckBounds').WithAnyArg(index).WithAnyArg(lower).WithAnyArg(upper).CreateLog();
 ELSIF(index > upper) THEN
 	CheckBounds := upper;
-	F_LogLA3(E_LogLevel.eFatal, 'CheckBounds', 'Check bounds exception: {index} {lower} {upper}', index, lower, upper);
+	F_Log(E_LogLevel.eFatal, 'Check bounds exception: {index} {lower} {upper}').WithLogger('CheckBounds').WithAnyArg(index).WithAnyArg(lower).WithAnyArg(upper).CreateLog();
 ELSE
 	CheckBounds := index;
 END_IF

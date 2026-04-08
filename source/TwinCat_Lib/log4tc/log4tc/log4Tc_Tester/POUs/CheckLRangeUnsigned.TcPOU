@@ -10,10 +10,10 @@ END_VAR]]></Declaration>
       <ST><![CDATA[{noflow}
 IF (value < lower) THEN
 	CheckLRangeUnsigned := lower;
-	F_LogLA3(E_LogLevel.eFatal, 'CheckLRangeUnsigned', 'Check ULINT range unsigned exception: {value} {lower} {upper}', value, lower, upper);
+	F_Log(E_LogLevel.eFatal, 'Check ULINT range unsigned exception: {value} {lower} {upper}').WithLogger('CheckLRangeUnsigned').WithAnyArg(value).WithAnyArg(lower).WithAnyArg(upper).CreateLog();
 ELSIF(value > upper) THEN
 	CheckLRangeUnsigned := upper;
-	F_LogLA3(E_LogLevel.eFatal, 'CheckLRangeUnsigned', 'Check ULINT range unsigned exception: {value} {lower} {upper}', value, lower, upper);
+	F_Log(E_LogLevel.eFatal, 'Check ULINT range unsigned exception: {value} {lower} {upper}').WithLogger('CheckLRangeUnsigned').WithAnyArg(value).WithAnyArg(lower).WithAnyArg(upper).CreateLog();
 ELSE
 	CheckLRangeUnsigned := value;
 END_IF

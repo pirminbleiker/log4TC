@@ -6,11 +6,8 @@
 
 use anyhow::Result;
 use log4tc_core::{AppSettings, LogEntry, LogRecord, MessageFormatter};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-
-// Defaults moved to config.rs ExportConfig
 
 /// Log dispatcher - converts LogEntries and sends them to a batched export worker
 #[derive(Clone)]
@@ -67,10 +64,13 @@ impl LogDispatcher {
     ) {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(4)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
         let mut batch: Vec<LogRecord> = Vec::with_capacity(batch_size);
+        // Reusable payload buffer to avoid re-allocation across flushes
+        let mut payload_buf = String::with_capacity(batch_size * 256);
         let mut interval = tokio::time::interval(flush_interval);
         let mut total_sent: u64 = 0;
         let mut total_errors: u64 = 0;
@@ -81,7 +81,7 @@ impl LogDispatcher {
                 Some(record) = rx.recv() => {
                     batch.push(record);
                     if batch.len() >= batch_size {
-                        match Self::flush_batch(&client, &endpoint, &batch).await {
+                        match Self::flush_batch(&client, &endpoint, &batch, &mut payload_buf).await {
                             Ok(n) => total_sent += n as u64,
                             Err(e) => {
                                 total_errors += 1;
@@ -94,7 +94,7 @@ impl LogDispatcher {
                 // Periodic flush
                 _ = interval.tick() => {
                     if !batch.is_empty() {
-                        match Self::flush_batch(&client, &endpoint, &batch).await {
+                        match Self::flush_batch(&client, &endpoint, &batch, &mut payload_buf).await {
                             Ok(n) => total_sent += n as u64,
                             Err(e) => {
                                 total_errors += 1;
@@ -108,7 +108,7 @@ impl LogDispatcher {
                 else => {
                     // Flush remaining
                     if !batch.is_empty() {
-                        let _ = Self::flush_batch(&client, &endpoint, &batch).await;
+                        let _ = Self::flush_batch(&client, &endpoint, &batch, &mut payload_buf).await;
                     }
                     tracing::info!("Export worker stopped. Total sent: {}, errors: {}", total_sent, total_errors);
                     break;
@@ -117,48 +117,62 @@ impl LogDispatcher {
         }
     }
 
-    /// Flush a batch of records to the endpoint as JSONL
+    /// Flush a batch of records to the endpoint as JSONL — builds payload directly
     async fn flush_batch(
         client: &reqwest::Client,
         endpoint: &str,
         batch: &[LogRecord],
+        payload: &mut String,
     ) -> Result<usize> {
         let count = batch.len();
+        payload.clear();
 
-        // Build JSONL payload (one JSON object per line)
-        let mut payload = String::with_capacity(count * 256);
+        // Build JSONL directly without intermediate serde_json::Map
         for record in batch {
-            let mut obj = serde_json::Map::new();
-
-            // Standard fields - use PLC timestamp as _time for correct ordering
-            obj.insert("_msg".to_string(), record.body.clone());
-            obj.insert("_time".to_string(), serde_json::json!(record.timestamp.to_rfc3339()));
-            obj.insert("level".to_string(), serde_json::json!(record.severity_text.to_lowercase()));
-            obj.insert("severity_number".to_string(), serde_json::json!(record.severity_number));
+            payload.push('{');
+            // _msg
+            payload.push_str("\"_msg\":");
+            push_json_value(payload, &record.body);
+            // _time
+            payload.push_str(",\"_time\":\"");
+            payload.push_str(&record.timestamp.to_rfc3339());
+            payload.push('"');
+            // level
+            payload.push_str(",\"level\":\"");
+            push_json_escaped(payload, &record.severity_text.to_lowercase());
+            payload.push('"');
+            // severity_number
+            payload.push_str(",\"severity_number\":");
+            {
+                use std::fmt::Write;
+                let _ = write!(payload, "{}", record.severity_number);
+            }
 
             // Scope attributes (logger name)
             for (k, v) in &record.scope_attributes {
-                obj.insert(k.clone(), v.clone());
+                payload.push(',');
+                push_json_key_value(payload, k, v);
             }
 
             // Resource attributes (service, host, task)
             for (k, v) in &record.resource_attributes {
-                obj.insert(k.clone(), v.clone());
+                payload.push(',');
+                push_json_key_value(payload, k, v);
             }
 
             // Log attributes (context, args, plc metadata)
             for (k, v) in &record.log_attributes {
-                obj.insert(k.clone(), v.clone());
+                payload.push(',');
+                push_json_key_value(payload, k, v);
             }
 
-            payload.push_str(&serde_json::to_string(&serde_json::Value::Object(obj))?);
-            payload.push('\n');
+            payload.push_str("}\n");
         }
 
         let response = client
             .post(endpoint)
             .header("Content-Type", "application/stream+json")
-            .body(payload)
+            .body(payload.clone())
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("HTTP error: {}", e))?;
@@ -169,7 +183,57 @@ impl LogDispatcher {
             return Err(anyhow::anyhow!("Export failed: HTTP {} - {}", status, body));
         }
 
-        tracing::debug!("Exported {} logs to {}", count, endpoint);
         Ok(count)
+    }
+}
+
+/// Write a JSON key:value pair directly to buffer
+#[inline]
+fn push_json_key_value(buf: &mut String, key: &str, value: &serde_json::Value) {
+    buf.push('"');
+    push_json_escaped(buf, key);
+    buf.push_str("\":");
+    push_json_value(buf, value);
+}
+
+/// Write a JSON value directly to buffer
+fn push_json_value(buf: &mut String, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Null => buf.push_str("null"),
+        serde_json::Value::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
+        serde_json::Value::Number(n) => {
+            use std::fmt::Write;
+            let _ = write!(buf, "{}", n);
+        }
+        serde_json::Value::String(s) => {
+            buf.push('"');
+            push_json_escaped(buf, s);
+            buf.push('"');
+        }
+        // Fallback for complex types
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            if let Ok(s) = serde_json::to_string(value) {
+                buf.push_str(&s);
+            }
+        }
+    }
+}
+
+/// Escape a string for JSON (handles \n, \r, \t, \", \\)
+#[inline]
+fn push_json_escaped(buf: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '"' => buf.push_str("\\\""),
+            '\\' => buf.push_str("\\\\"),
+            '\n' => buf.push_str("\\n"),
+            '\r' => buf.push_str("\\r"),
+            '\t' => buf.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(buf, "\\u{:04x}", c as u32);
+            }
+            c => buf.push(c),
+        }
     }
 }

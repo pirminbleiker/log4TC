@@ -16,13 +16,20 @@ const MAX_CONTEXT_VARS: usize = 64;
 /// Maximum total message size (1 MB)
 const MAX_MESSAGE_SIZE: usize = 1_048_576;
 
+/// Result of parsing a buffer containing both log entries and registrations
+#[derive(Debug, Clone)]
+pub struct ParseResult {
+    pub entries: Vec<AdsLogEntry>,
+    pub registrations: Vec<RegistrationMessage>,
+}
+
 /// Parser for ADS binary protocol messages
 pub struct AdsParser;
 
 impl AdsParser {
-    /// Parse ALL log entries from a buffer (buffer can contain multiple entries)
+    /// Parse ALL log entries and registrations from a buffer (buffer can contain multiple entries)
     /// Parse ALL log entries from a buffer (PLC sends multiple entries per ADS Write)
-    pub fn parse_all(data: &[u8]) -> Result<Vec<AdsLogEntry>> {
+    pub fn parse_all(data: &[u8]) -> Result<ParseResult> {
         if data.len() > MAX_MESSAGE_SIZE {
             return Err(AdsError::ParseError(
                 format!("Message size {} exceeds maximum {}", data.len(), MAX_MESSAGE_SIZE)
@@ -30,30 +37,87 @@ impl AdsParser {
         }
 
         let mut entries = Vec::new();
+        let mut registrations = Vec::new();
         let mut reader = BytesReader::new(data);
 
         while reader.remaining() > 0 {
-            // Skip zero padding
-            if reader.peek() == Some(0) {
-                break;
+            // Skip zero padding or legacy terminator
+            match reader.peek() {
+                Some(0) | Some(0xFF) | None => break,
+                _ => {}
             }
-            match Self::parse_from_reader(&mut reader) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    if entries.is_empty() {
-                        return Err(e);
+
+            // Dispatch on message type (first byte)
+            let message_type = reader.peek().unwrap();
+            match message_type {
+                1 => {
+                    // v1 log entry
+                    match Self::parse_v1_from_reader(&mut reader) {
+                        Ok(entry) => entries.push(entry),
+                        Err(e) => {
+                            if entries.is_empty() && registrations.is_empty() {
+                                return Err(e);
+                            }
+                            // Partial entry at end - ok, we got what we could
+                            tracing::debug!("Partial entry at buffer end ({} bytes remaining): {}", reader.remaining(), e);
+                            break;
+                        }
                     }
-                    // Partial entry at end - ok, we got what we could
-                    tracing::debug!("Partial entry at buffer end ({} bytes remaining): {}", reader.remaining(), e);
+                }
+                2 => {
+                    // v2 log entry
+                    let entry_pos = reader.pos;
+                    let peek_len = std::cmp::min(40, reader.remaining());
+                    let peek_bytes = &reader.data[entry_pos..entry_pos + peek_len];
+                    tracing::debug!("Parsing v2 entry at offset {} (entries so far: {}), first {} bytes: {:02x?}", entry_pos, entries.len(), peek_len, peek_bytes);
+                    match Self::parse_v2_from_reader(&mut reader) {
+                        Ok(entry) => entries.push(entry),
+                        Err(e) => {
+                            if !entries.is_empty() || !registrations.is_empty() {
+                                // Already parsed some entries — remaining buffer is likely padding/garbage
+                                tracing::debug!("Partial v2 entry at buffer end ({} bytes remaining): {}", reader.remaining(), e);
+                                break;
+                            }
+                            tracing::debug!("Error parsing v2 entry: {}", e);
+                            // Try to skip using entry_length if available
+                            let skip_pos = reader.pos;
+                            if reader.remaining() >= 3 {
+                                // Try to read entry_length to skip ahead
+                                reader.pos += 1; // Skip type byte
+                                if let Ok(entry_len) = reader.read_u16() {
+                                    reader.pos = skip_pos + entry_len as usize + 3;
+                                } else {
+                                    // Can't skip, stop parsing
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                3 => {
+                    // Registration message
+                    match Self::parse_registration_from_reader(&mut reader) {
+                        Ok(reg) => registrations.push(reg),
+                        Err(e) => {
+                            tracing::debug!("Error parsing registration: {}", e);
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown message type, stop
+                    tracing::warn!("Unknown message type: {}", message_type);
                     break;
                 }
             }
         }
 
-        Ok(entries)
+        Ok(ParseResult { entries, registrations })
     }
 
-    /// Parse a single ADS log entry from bytes
+    /// Parse a single ADS log entry from bytes (v1 only for backward compatibility)
     pub fn parse(data: &[u8]) -> Result<AdsLogEntry> {
         if data.len() > MAX_MESSAGE_SIZE {
             return Err(AdsError::ParseError(
@@ -62,10 +126,10 @@ impl AdsParser {
         }
 
         let mut reader = BytesReader::new(data);
-        Self::parse_from_reader(&mut reader)
+        Self::parse_v1_from_reader(&mut reader)
     }
 
-    fn parse_from_reader(reader: &mut BytesReader) -> Result<AdsLogEntry> {
+    fn parse_v1_from_reader(reader: &mut BytesReader) -> Result<AdsLogEntry> {
         // Version (1 byte)
         let version_byte = reader.read_u8()?;
         let version =
@@ -97,9 +161,9 @@ impl AdsParser {
         let project_name = reader.read_string()?;
         let online_change_count = reader.read_u32()?;
 
-        // Arguments and context
-        let mut arguments = HashMap::new();
-        let mut context = HashMap::new();
+        // Arguments and context (pre-allocate small capacity)
+        let mut arguments = HashMap::with_capacity(8);
+        let mut context = HashMap::with_capacity(4);
 
         loop {
             // Check if there's more data
@@ -155,11 +219,131 @@ impl AdsParser {
             context,
         })
     }
+
+    fn parse_v2_from_reader(reader: &mut BytesReader) -> Result<AdsLogEntry> {
+        // Type byte (should be 2)
+        let version_byte = reader.read_u8()?;
+        if version_byte != 2 {
+            return Err(AdsError::InvalidVersion(version_byte));
+        }
+
+        // Entry length (2 bytes LE) - total length from after this field
+        let entry_length = reader.read_u16()? as usize;
+        let entry_start = reader.pos;
+
+        // Fixed header (27 - 3 = 24 bytes after entry_length)
+        let level_byte = reader.read_u8()?;
+        let level = LogLevel::from_u8(level_byte)
+            .ok_or(AdsError::ParseError(format!("Invalid log level: {}", level_byte)))?;
+
+        let plc_timestamp = reader.read_filetime()?;
+        let clock_timestamp = reader.read_filetime()?;
+
+        let task_index = reader.read_u8()? as i32;
+        let cycle_counter = reader.read_u32()?;
+        let arg_count = reader.read_u8()? as usize;
+        let context_count = reader.read_u8()? as usize;
+
+        // Message string
+        let message = reader.read_string()?;
+
+        // Logger string (0 length = global/default logger)
+        let logger = reader.read_string()?;
+
+        // Arguments (1-based keys to match v1 format and formatter expectations)
+        let mut arguments = HashMap::with_capacity(arg_count);
+        for arg_idx in 0..arg_count {
+            if arguments.len() >= MAX_ARGUMENTS {
+                return Err(AdsError::ParseError(format!("Too many arguments")));
+            }
+            let type_id = reader.read_u8()?;
+            let type_id_i32 = Self::remap_v2_type_id(type_id as i32);
+            let value = reader.read_value_with_type(type_id_i32)?;
+            arguments.insert(arg_idx + 1, value);
+        }
+
+        // Context
+        let mut context = HashMap::with_capacity(context_count * 2);
+        let mut context_idx = 0;
+        for _ in 0..context_count {
+            if context_idx >= MAX_CONTEXT_VARS {
+                return Err(AdsError::ParseError(format!("Too many context variables")));
+            }
+            let scope = reader.read_u8()?;
+            let prop_count = reader.read_u8()?;
+
+            for _ in 0..prop_count {
+                let name = reader.read_string()?;
+                let type_id = reader.read_u8()?;
+                let type_id_i32 = Self::remap_v2_type_id(type_id as i32);
+                let value = reader.read_value_with_type(type_id_i32)?;
+                context.insert(format!("scope_{}_{}",scope, name), value);
+                context_idx += 1;
+            }
+        }
+
+        // Sync reader position to entry boundary — the PLC may pad entries
+        // or include fields we don't yet parse. entry_length is authoritative.
+        reader.pos = entry_start + entry_length;
+
+        Ok(AdsLogEntry {
+            version: AdsProtocolVersion::V2,
+            message,
+            logger,
+            level,
+            plc_timestamp,
+            clock_timestamp,
+            task_index,
+            task_name: String::new(), // Will be filled by registry lookup
+            task_cycle_counter: cycle_counter,
+            app_name: String::new(),  // Will be filled by registry lookup
+            project_name: String::new(), // Will be filled by registry lookup
+            online_change_count: 0,    // Will be filled by registry lookup
+            arguments,
+            context,
+        })
+    }
+
+    fn parse_registration_from_reader(reader: &mut BytesReader) -> Result<RegistrationMessage> {
+        // Type byte (should be 3)
+        let type_byte = reader.read_u8()?;
+        if type_byte != 3 {
+            return Err(AdsError::ParseError(format!("Invalid registration type: {}", type_byte)));
+        }
+
+        let task_index = reader.read_u8()?;
+        let task_name = reader.read_string()?;
+        let app_name = reader.read_string()?;
+        let project_name = reader.read_string()?;
+        let online_change_count = reader.read_u32()?;
+
+        Ok(RegistrationMessage {
+            task_index,
+            task_name,
+            app_name,
+            project_name,
+            online_change_count,
+        })
+    }
+
+    /// Remap v2 type ID (1 byte) to internal format (for lookup in read_value_with_type)
+    fn remap_v2_type_id(v2_type: i32) -> i32 {
+        match v2_type {
+            100 => 20000, // TIME
+            101 => 20001, // LTIME
+            102 => 20002, // DATE
+            103 => 20003, // DATE_AND_TIME
+            104 => 20004, // TIME_OF_DAY
+            105 => 20005, // ENUM
+            106 => 20006, // WSTRING
+            other => other, // Standard types 1-17 pass through unchanged
+        }
+    }
 }
 
 struct BytesReader<'a> {
     data: &'a [u8],
-    pos: usize,
+    pub pos: usize,
 }
 
 impl<'a> BytesReader<'a> {
@@ -168,7 +352,7 @@ impl<'a> BytesReader<'a> {
     }
 
     fn remaining(&self) -> usize {
-        self.data.len() - self.pos
+        self.data.len().saturating_sub(self.pos)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -351,6 +535,129 @@ impl<'a> BytesReader<'a> {
             20005 => {                                                               // ENUM (recursive)
                 // Read underlying type, then value
                 let underlying = self.read_i16()? as i32;
+                match underlying {
+                    1 | 9 => { let v = self.read_u8()?; Ok(serde_json::json!(v)) }
+                    2 | 10 => { let v = self.read_u16()?; Ok(serde_json::json!(v)) }
+                    3 | 11 => { let v = self.read_u32()?; Ok(serde_json::json!(v)) }
+                    15 => {
+                        let b = self.read_bytes(8)?;
+                        Ok(serde_json::json!(u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+                    }
+                    _ => {
+                        tracing::warn!("Unknown enum underlying type: {}", underlying);
+                        Ok(serde_json::Value::Null)
+                    }
+                }
+            }
+            20006 => {                                                               // WSTRING (UTF-16LE)
+                // Length in characters (1 byte), data is len*2 bytes UTF-16LE
+                let char_count = self.read_u8()? as usize;
+                let byte_count = char_count * 2;
+                let raw = self.read_bytes(byte_count)?;
+                // Decode UTF-16LE
+                let u16_vals: Vec<u16> = raw.chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                let s = String::from_utf16_lossy(&u16_vals);
+                Ok(serde_json::Value::String(s))
+            }
+            _ => {
+                tracing::warn!("Unknown value type: {}", val_type);
+                Ok(serde_json::Value::Null)
+            }
+        }
+    }
+
+    /// Read a typed value when the type is already known (v2 protocol)
+    fn read_value_with_type(&mut self, val_type: i32) -> Result<serde_json::Value> {
+        match val_type {
+            0 => Ok(serde_json::Value::Null),
+            1 | 9 => { let v = self.read_u8()?; Ok(serde_json::json!(v)) }         // BYTE/USINT
+            2 | 10 => { let v = self.read_u16()?; Ok(serde_json::json!(v)) }       // WORD/UINT
+            3 | 11 => { let v = self.read_u32()?; Ok(serde_json::json!(v)) }       // DWORD/UDINT
+            4 => {                                                                   // REAL (f32)
+                let b = self.read_bytes(4)?;
+                Ok(serde_json::json!(f32::from_le_bytes([b[0],b[1],b[2],b[3]])))
+            }
+            5 => {                                                                   // LREAL (f64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(f64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+            }
+            6 => { let v = self.read_u8()? as i8; Ok(serde_json::json!(v)) }       // SINT
+            7 => { let v = self.read_i16()?; Ok(serde_json::json!(v)) }             // INT
+            8 => { let v = self.read_i32()?; Ok(serde_json::json!(v)) }             // DINT
+            12 => { let s = self.read_string()?; Ok(serde_json::Value::String(s)) } // STRING
+            13 => { let b = self.read_u8()? != 0; Ok(serde_json::Value::Bool(b)) }  // BOOL
+            15 => {                                                                  // ULARGE (u64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+            }
+            17 => {                                                                  // LARGE (i64)
+                let b = self.read_bytes(8)?;
+                Ok(serde_json::json!(i64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]])))
+            }
+            20000 => {                                                               // TIME (ms as u32)
+                let total_ms = self.read_u32()?;
+                let d = total_ms / 86_400_000;
+                let h = (total_ms % 86_400_000) / 3_600_000;
+                let m = (total_ms % 3_600_000) / 60_000;
+                let s = (total_ms % 60_000) / 1000;
+                let ms = total_ms % 1000;
+                let mut parts = String::from("T#");
+                if d > 0 { parts.push_str(&format!("{}d", d)); }
+                if h > 0 { parts.push_str(&format!("{}h", h)); }
+                if m > 0 { parts.push_str(&format!("{}m", m)); }
+                if s > 0 || (d == 0 && h == 0 && m == 0 && ms == 0) { parts.push_str(&format!("{}s", s)); }
+                if ms > 0 { parts.push_str(&format!("{}ms", ms)); }
+                Ok(serde_json::Value::String(parts))
+            }
+            20001 => {                                                               // LTIME (100ns as u64)
+                let b = self.read_bytes(8)?;
+                let ns100 = u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]]);
+                let total_ns = ns100 * 100;
+                let d = total_ns / 86_400_000_000_000;
+                let h = (total_ns % 86_400_000_000_000) / 3_600_000_000_000;
+                let m = (total_ns % 3_600_000_000_000) / 60_000_000_000;
+                let s = (total_ns % 60_000_000_000) / 1_000_000_000;
+                let ms = (total_ns % 1_000_000_000) / 1_000_000;
+                let us = (total_ns % 1_000_000) / 1_000;
+                let ns = total_ns % 1_000;
+                let mut parts = String::from("LTIME#");
+                if d > 0 { parts.push_str(&format!("{}d", d)); }
+                if h > 0 { parts.push_str(&format!("{}h", h)); }
+                if m > 0 { parts.push_str(&format!("{}m", m)); }
+                if s > 0 { parts.push_str(&format!("{}s", s)); }
+                if ms > 0 { parts.push_str(&format!("{}ms", ms)); }
+                if us > 0 { parts.push_str(&format!("{}us", us)); }
+                if ns > 0 { parts.push_str(&format!("{}ns", ns)); }
+                if parts == "LTIME#" { parts.push_str("0s"); }
+                Ok(serde_json::Value::String(parts))
+            }
+            20004 => {                                                               // TIME_OF_DAY (ms as u32)
+                let total_ms = self.read_u32()?;
+                let h = total_ms / 3_600_000;
+                let m = (total_ms % 3_600_000) / 60_000;
+                let s = (total_ms % 60_000) / 1000;
+                let ms = total_ms % 1000;
+                if ms > 0 {
+                    Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}.{:03}", h, m, s, ms)))
+                } else {
+                    Ok(serde_json::Value::String(format!("TOD#{:02}:{:02}:{:02}", h, m, s)))
+                }
+            }
+            20002 => {                                                               // DATE
+                let unix_secs = self.read_u32()? as i64;
+                let dt = chrono::DateTime::from_timestamp(unix_secs, 0).unwrap_or_default();
+                Ok(serde_json::Value::String(format!("D#{}", dt.format("%Y-%-m-%-d"))))
+            }
+            20003 => {                                                               // DATE_AND_TIME
+                let unix_secs = self.read_u32()? as i64;
+                let dt = chrono::DateTime::from_timestamp(unix_secs, 0).unwrap_or_default();
+                Ok(serde_json::Value::String(format!("DT#{}", dt.format("%Y-%-m-%-d-%H:%M:%S"))))
+            }
+            20005 => {                                                               // ENUM (recursive)
+                // Read underlying type, then value
+                let underlying = self.read_u8()? as i32;
                 match underlying {
                     1 | 9 => { let v = self.read_u8()?; Ok(serde_json::json!(v)) }
                     2 | 10 => { let v = self.read_u16()?; Ok(serde_json::json!(v)) }
@@ -885,5 +1192,263 @@ mod tests {
         assert!(entry.arguments[&2].is_string());
         assert!(entry.arguments[&3].is_boolean());
         assert!(entry.arguments[&4].is_boolean());
+    }
+
+    // Tests for v2 protocol
+    #[test]
+    fn test_parse_v2_minimal() {
+        let mut payload = Vec::new();
+        payload.push(2); // type = v2
+
+        // entry_length (placeholder, will be updated)
+        let len_pos = payload.len();
+        payload.extend_from_slice(&0u16.to_le_bytes());
+
+        // Fixed header (27 - 3 = 24 bytes after entry_length)
+        payload.push(2); // level = Info
+
+        // Timestamps (FILETIME: 100-ns intervals)
+        let filetime = (Utc::now().timestamp() as u64 * 10_000_000) + 116444736000000000;
+        payload.extend_from_slice(&filetime.to_le_bytes()); // plc_timestamp
+        payload.extend_from_slice(&filetime.to_le_bytes()); // clock_timestamp
+
+        payload.push(1); // task_index
+        payload.extend_from_slice(&100u32.to_le_bytes()); // cycle_counter
+        payload.push(0); // arg_count
+        payload.push(0); // context_count
+
+        // Message string
+        let msg = "Test v2 message";
+        payload.push(msg.len() as u8);
+        payload.extend_from_slice(msg.as_bytes());
+
+        // Logger string (empty = global)
+        payload.push(0);
+
+        // Update entry_length
+        let entry_len = (payload.len() - len_pos - 2) as u16;
+        payload[len_pos..len_pos+2].copy_from_slice(&entry_len.to_le_bytes());
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.registrations.len(), 0);
+
+        let entry = &result.entries[0];
+        assert_eq!(entry.version, AdsProtocolVersion::V2);
+        assert_eq!(entry.message, msg);
+        assert_eq!(entry.level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_parse_v2_with_arguments() {
+        let mut payload = Vec::new();
+        payload.push(2); // type = v2
+
+        let len_pos = payload.len();
+        payload.extend_from_slice(&0u16.to_le_bytes());
+
+        payload.push(2); // level = Info
+
+        let filetime = (Utc::now().timestamp() as u64 * 10_000_000) + 116444736000000000;
+        payload.extend_from_slice(&filetime.to_le_bytes());
+        payload.extend_from_slice(&filetime.to_le_bytes());
+
+        payload.push(1); // task_index
+        payload.extend_from_slice(&100u32.to_le_bytes());
+        payload.push(1); // arg_count = 1
+        payload.push(0); // context_count = 0
+
+        let msg = b"Test: {0}";
+        payload.push(msg.len() as u8); // message length
+        payload.extend_from_slice(msg);
+        payload.push(0); // logger empty
+
+        // Argument: DINT value (type_id = 8, which is standard type, not remapped)
+        payload.push(8); // type_id (1 byte in v2)
+        payload.extend_from_slice(&42i32.to_le_bytes());
+
+        let entry_len = (payload.len() - len_pos - 2) as u16;
+        payload[len_pos..len_pos+2].copy_from_slice(&entry_len.to_le_bytes());
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 1);
+
+        let entry = &result.entries[0];
+        assert_eq!(entry.arguments.len(), 1);
+        assert_eq!(entry.arguments[&0], serde_json::json!(42));
+    }
+
+    #[test]
+    fn test_parse_registration() {
+        let mut payload = Vec::new();
+        payload.push(3); // type = registration
+        payload.push(5); // task_index
+
+        let task_name = "MainTask";
+        payload.push(task_name.len() as u8);
+        payload.extend_from_slice(task_name.as_bytes());
+
+        let app_name = "MyApp";
+        payload.push(app_name.len() as u8);
+        payload.extend_from_slice(app_name.as_bytes());
+
+        let project_name = "MyProject";
+        payload.push(project_name.len() as u8);
+        payload.extend_from_slice(project_name.as_bytes());
+
+        payload.extend_from_slice(&123u32.to_le_bytes()); // online_change_count
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 0);
+        assert_eq!(result.registrations.len(), 1);
+
+        let reg = &result.registrations[0];
+        assert_eq!(reg.task_index, 5);
+        assert_eq!(reg.task_name, task_name);
+        assert_eq!(reg.app_name, app_name);
+        assert_eq!(reg.project_name, project_name);
+        assert_eq!(reg.online_change_count, 123);
+    }
+
+    #[test]
+    fn test_parse_mixed_v1_v2_registration() {
+        let mut payload = Vec::new();
+
+        // First: Registration (0x03)
+        payload.push(3);
+        payload.push(1); // task_index
+        payload.push(4); // "Task"
+        payload.extend_from_slice(b"Task");
+        payload.push(3); // "App"
+        payload.extend_from_slice(b"App");
+        payload.push(4); // "Proj"
+        payload.extend_from_slice(b"Proj");
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        // Second: v1 entry
+        let v1_payload = build_test_payload("V1 message", "v1.logger", 2);
+        payload.extend_from_slice(&v1_payload);
+
+        // Third: v2 entry
+        payload.push(2); // type = v2
+        let len_pos = payload.len();
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.push(3); // level = Warn
+        let filetime = (Utc::now().timestamp() as u64 * 10_000_000) + 116444736000000000;
+        payload.extend_from_slice(&filetime.to_le_bytes());
+        payload.extend_from_slice(&filetime.to_le_bytes());
+        payload.push(2); // task_index
+        payload.extend_from_slice(&50u32.to_le_bytes());
+        payload.push(0); // arg_count
+        payload.push(0); // context_count
+        payload.push(5); // "V2msg"
+        payload.extend_from_slice(b"V2msg");
+        payload.push(0); // logger empty
+
+        let entry_len = (payload.len() - len_pos - 2) as u16;
+        payload[len_pos..len_pos+2].copy_from_slice(&entry_len.to_le_bytes());
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 2);
+        assert_eq!(result.registrations.len(), 1);
+
+        // Check registration
+        assert_eq!(result.registrations[0].task_name, "Task");
+
+        // Check v1 entry
+        assert_eq!(result.entries[0].version, AdsProtocolVersion::V1);
+        assert_eq!(result.entries[0].message, "V1 message");
+
+        // Check v2 entry
+        assert_eq!(result.entries[1].version, AdsProtocolVersion::V2);
+        assert_eq!(result.entries[1].message, "V2msg");
+        assert_eq!(result.entries[1].level, LogLevel::Warn);
+    }
+
+    #[test]
+    fn test_parse_v2_with_context() {
+        let mut payload = Vec::new();
+        payload.push(2); // type = v2
+
+        let len_pos = payload.len();
+        payload.extend_from_slice(&0u16.to_le_bytes());
+
+        payload.push(2); // level
+        let filetime = (Utc::now().timestamp() as u64 * 10_000_000) + 116444736000000000;
+        payload.extend_from_slice(&filetime.to_le_bytes());
+        payload.extend_from_slice(&filetime.to_le_bytes());
+
+        payload.push(1); // task_index
+        payload.extend_from_slice(&100u32.to_le_bytes());
+        payload.push(0); // arg_count
+        payload.push(1); // context_count = 1 (one scope group)
+
+        payload.push(5); // message
+        payload.extend_from_slice(b"Test!");
+        payload.push(0); // logger empty
+
+        // Context scope group
+        payload.push(1); // scope = 1
+        payload.push(1); // prop_count = 1 property in this scope
+
+        // Property: request_id
+        let prop_name = "request_id";
+        payload.push(prop_name.len() as u8);
+        payload.extend_from_slice(prop_name.as_bytes());
+        payload.push(12); // type_id = STRING
+        let prop_val = "req-123";
+        payload.push(prop_val.len() as u8);
+        payload.extend_from_slice(prop_val.as_bytes());
+
+        let entry_len = (payload.len() - len_pos - 2) as u16;
+        payload[len_pos..len_pos+2].copy_from_slice(&entry_len.to_le_bytes());
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 1);
+
+        let entry = &result.entries[0];
+        assert_eq!(entry.context.len(), 1);
+        assert!(entry.context.contains_key("scope_1_request_id"));
+        assert_eq!(entry.context["scope_1_request_id"], serde_json::json!("req-123"));
+    }
+
+    #[test]
+    fn test_parse_multiple_registrations() {
+        let mut payload = Vec::new();
+
+        // Two registrations for different tasks
+        for task_idx in 0..2 {
+            payload.push(3); // type = registration
+            payload.push(task_idx); // task_index
+            let task_name = format!("Task{}", task_idx);
+            payload.push(task_name.len() as u8);
+            payload.extend_from_slice(task_name.as_bytes());
+            payload.push(3); // "App"
+            payload.extend_from_slice(b"App");
+            payload.push(4); // "Proj"
+            payload.extend_from_slice(b"Proj");
+            payload.extend_from_slice(&(task_idx as u32).to_le_bytes());
+        }
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.registrations.len(), 2);
+        assert_eq!(result.registrations[0].task_index, 0);
+        assert_eq!(result.registrations[1].task_index, 1);
+    }
+
+    #[test]
+    fn test_parse_v1_v1_entries_in_buffer() {
+        // Two v1 entries in one buffer
+        let mut payload = build_test_payload("First", "log1", 2);
+        payload.pop(); // Remove end marker of first entry
+        payload.push(0); // Add end marker between entries
+
+        let second = build_test_payload("Second", "log2", 3);
+        payload.extend_from_slice(&second);
+
+        let result = AdsParser::parse_all(&payload).unwrap();
+        assert_eq!(result.entries.len(), 2);
+        assert_eq!(result.entries[0].message, "First");
+        assert_eq!(result.entries[1].message, "Second");
     }
 }

@@ -15,7 +15,7 @@ END_VAR
       <Declaration><![CDATA[METHOD INTERNAL AddBuffer
 VAR_INPUT
 	pBuffer			: PVOID;
-	nBufferLen		: UINT;
+	nBufferLen		: UDINT;
 END_VAR
 ]]></Declaration>
     </Method>
@@ -24,7 +24,7 @@ END_VAR
 VAR_INPUT
 	eScope			: E_Scope;
 	pBuffer			: PVOID;
-	nBufferLen		: UINT;
+	nBufferLen		: UDINT;
 END_VAR
 
 ]]></Declaration>

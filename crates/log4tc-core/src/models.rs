@@ -82,6 +82,8 @@ pub struct LogEntry {
     // Source identification
     pub source: String,      // AMS address or source identifier
     pub hostname: String,    // PLC hostname
+    pub ams_net_id: String,  // AMS Net ID from AMS header
+    pub ams_source_port: u16, // AMS Source Port from AMS header
 
     // Message content
     pub message: String,     // Template string or formatted message
@@ -120,6 +122,8 @@ impl LogEntry {
             id: Uuid::new_v4().to_string(),
             source,
             hostname,
+            ams_net_id: String::new(),
+            ams_source_port: 0,
             message,
             logger,
             level,
@@ -207,6 +211,18 @@ impl LogRecord {
             "source.address".to_string(),
             serde_json::Value::String(entry.source),
         );
+        if !entry.ams_net_id.is_empty() {
+            log_attributes.insert(
+                "plc.ams_net_id".to_string(),
+                serde_json::Value::String(entry.ams_net_id),
+            );
+        }
+        if entry.ams_source_port > 0 {
+            log_attributes.insert(
+                "plc.ams_source_port".to_string(),
+                serde_json::Value::Number(entry.ams_source_port.into()),
+            );
+        }
 
         // Merge in positional arguments with pre-formatted keys
         for (idx, val) in entry.arguments {

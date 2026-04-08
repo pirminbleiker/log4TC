@@ -16,14 +16,99 @@ VAR
 	nTaskIndex			: DINT;
 	fbTaskContext		: FB_ContextBuilder;
 	sAmsNetId			: Tc2_System.T_AmsNetID := '';
-	
+
 	nWriteBuffer		: UINT (1..2) := 1;
 	fbLogBuffer1		: FB_LogBuffer;
 	fbLogBuffer2		: FB_LogBuffer;
+
+	// v2 Protocol registration
+	bRegistrationDirty	: BOOL := TRUE;		// TRUE on startup → first registration
+	nLastOnlineChange	: UDINT := 0;		// Track online change count
 END_VAR]]></Declaration>
     <Implementation>
       <ST><![CDATA[]]></ST>
     </Implementation>
+    <Method Name="_WriteByte" Id="{d3e4f5a6-b7c8-d9e0-f1a2-b3c4d5e6f7a8}">
+      <Declaration><![CDATA[METHOD PRIVATE _WriteByte
+VAR_INPUT
+	pWriteBuffer	: POINTER TO FB_LogBuffer;
+	nValue			: BYTE;
+END_VAR
+VAR
+	pBuf			: PVOID;
+	nPos			: UINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF pWriteBuffer^.BufferFree >= SIZEOF(nValue) THEN
+	Tc2_System.MEMCPY(pWriteBuffer^.BufferPtr, ADR(nValue), SIZEOF(nValue));
+	pWriteBuffer^.DataAdded(SIZEOF(nValue));
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="_WriteString" Id="{e4f5a6b7-c8d9-e0f1-a2b3-c4d5e6f7a8b9}">
+      <Declaration><![CDATA[METHOD PRIVATE _WriteString
+VAR_INPUT
+	pWriteBuffer	: POINTER TO FB_LogBuffer;
+	pValue			: POINTER TO Tc2_Utilities.T_MaxString;
+END_VAR
+VAR
+	nLen			: INT;
+	pBuf			: PVOID;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF pValue <> 0 THEN
+	nLen := TO_INT(Tc2_Utilities.LEN2(pValue));
+	IF nLen >= 0 AND nLen <= 255 THEN
+		_WriteByte(pWriteBuffer, INT_TO_BYTE(nLen));
+		IF pWriteBuffer^.BufferFree >= INT_TO_UINT(nLen) THEN
+			Tc2_System.MEMCPY(pWriteBuffer^.BufferPtr, pValue, INT_TO_UINT(nLen));
+			pWriteBuffer^.DataAdded(INT_TO_UINT(nLen));
+		END_IF
+	END_IF
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="_WriteUDInt" Id="{f5a6b7c8-d9e0-f1a2-b3c4-d5e6f7a8b9ca}">
+      <Declaration><![CDATA[METHOD PRIVATE _WriteUDInt
+VAR_INPUT
+	pWriteBuffer	: POINTER TO FB_LogBuffer;
+	nValue			: UDINT;
+END_VAR
+VAR
+	pBuf			: PVOID;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF pWriteBuffer^.BufferFree >= SIZEOF(nValue) THEN
+	Tc2_System.MEMCPY(pWriteBuffer^.BufferPtr, ADR(nValue), SIZEOF(nValue));
+	pWriteBuffer^.DataAdded(SIZEOF(nValue));
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="_WriteRegistration" Id="{a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d}">
+      <Declaration><![CDATA[METHOD PRIVATE _WriteRegistration
+VAR
+	pWriteBuffer	: POINTER TO FB_LogBuffer;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[pWriteBuffer := WriteBuffer;
+
+// Write Registration message (0x03)
+_WriteByte(pWriteBuffer, 3);										// Type = 0x03 (Registration)
+_WriteByte(pWriteBuffer, TO_BYTE(nTaskIndex));					// Task index
+_WriteString(pWriteBuffer, ADR(TwinCAT_SystemInfoVarList._TaskInfo[nTaskIndex].TaskName));	// Task name
+_WriteString(pWriteBuffer, ADR(TwinCAT_SystemInfoVarList._AppInfo.AppName));				// App name
+_WriteString(pWriteBuffer, ADR(TwinCAT_SystemInfoVarList._AppInfo.ProjectName));			// Project name
+_WriteUDInt(pWriteBuffer, TwinCAT_SystemInfoVarList._AppInfo.OnlineChangeCnt);				// Online change count
+]]></ST>
+      </Implementation>
+    </Method>
     <Method Name="_InitAndCheckTask" Id="{cf1c3c00-c377-4ffb-a1eb-30fbb2bc0114}">
       <Declaration><![CDATA[METHOD PRIVATE _InitAndCheckTask : BOOL
 VAR
@@ -93,10 +178,22 @@ CASE nState OF
 	10: // Wait for log entry; add them to the send buffer
 		pWriteBuffer := WriteBuffer;
 
+		// Check online change detection
+		IF TwinCAT_SystemInfoVarList._AppInfo.OnlineChangeCnt <> nLastOnlineChange THEN
+			bRegistrationDirty := TRUE;
+		END_IF
+
+		// Send registration if needed
+		IF bRegistrationDirty AND pWriteBuffer^.BufferFree > 100 THEN
+			_WriteRegistration();
+			bRegistrationDirty := FALSE;
+			nLastOnlineChange := TwinCAT_SystemInfoVarList._AppInfo.OnlineChangeCnt;
+		END_IF
+
 		IF pWriteBuffer^.BufferUsed > 0 THEN
 			// Switch buffer for next write
 			nWriteBuffer := SEL(nWriteBuffer = 1, 1 , 2);
-			
+
 			fbAdsWriteMsg(WRITE:=FALSE);
 			fbAdsWriteMsg(
 				WRITE	:= TRUE,
@@ -106,7 +203,7 @@ CASE nState OF
 				LEN		:= pWriteBuffer^.BufferUsed,
 				SRCADDR	:= pWriteBuffer^.BufferStartPtr,
 			);
-			
+
 			F_InternalLog(
 				E_LogLevel.eDebug,
 				'FB_Log4TcTask.Call',
@@ -115,9 +212,9 @@ CASE nState OF
 				Tc2_Utilities.EMPTY_ARG_VALUE,
 				Tc2_Utilities.EMPTY_ARG_VALUE,
 				Tc2_Utilities.EMPTY_ARG_VALUE
-			);				
-		
-			nState := 20;			
+			);
+
+			nState := 20;
 		END_IF		
 		
 	20: // Wait for sent data
@@ -133,9 +230,12 @@ CASE nState OF
 					Tc2_Utilities.EMPTY_ARG_VALUE,
 					Tc2_Utilities.EMPTY_ARG_VALUE
 				);
-				
+
 				IncUDINT(Log4TcInfo.aTaskInfo[nTaskIndex].nSendLogBufferErrorCount);
-				
+
+				// Re-register on ADS error (service might have restarted)
+				bRegistrationDirty := TRUE;
+
 				fbRetryWait(IN:=FALSE);
 				nState := 30;
 			ELSE
@@ -147,8 +247,8 @@ CASE nState OF
 					Tc2_Utilities.EMPTY_ARG_VALUE,
 					Tc2_Utilities.EMPTY_ARG_VALUE,
 					Tc2_Utilities.EMPTY_ARG_VALUE
-				);	
-				
+				);
+
 				pReadBuffer := _ReadBuffer;
 				pReadBuffer^.Clear();
 				nState := 10;

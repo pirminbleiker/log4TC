@@ -15,6 +15,8 @@ pub const ADS_DEFAULT_PORT: u16 = 16150;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdsProtocolVersion {
     V1 = 1,
+    V2 = 2,
+    Registration = 3,
 }
 
 impl AdsProtocolVersion {
@@ -25,6 +27,8 @@ impl AdsProtocolVersion {
     pub fn from_u8(val: u8) -> Option<Self> {
         match val {
             1 => Some(AdsProtocolVersion::V1),
+            2 => Some(AdsProtocolVersion::V2),
+            3 => Some(AdsProtocolVersion::Registration),
             _ => None,
         }
     }
@@ -64,6 +68,33 @@ pub struct AdsContext {
     pub scope: u8,
     pub name: String,
     pub value: serde_json::Value,
+}
+
+/// Registration message for static task metadata (protocol v2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistrationMessage {
+    pub task_index: u8,
+    pub task_name: String,
+    pub app_name: String,
+    pub project_name: String,
+    pub online_change_count: u32,
+}
+
+/// Unique key for task registration: (AMS Net ID, AMS Source Port, Task Index)
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistrationKey {
+    pub ams_net_id: String,
+    pub ams_source_port: u16,
+    pub task_index: u8,
+}
+
+/// Task metadata from registration message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskMetadata {
+    pub task_name: String,
+    pub app_name: String,
+    pub project_name: String,
+    pub online_change_count: u32,
 }
 
 #[cfg(test)]

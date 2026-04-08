@@ -4,7 +4,7 @@
     <Declaration><![CDATA[{attribute 'qualified_only'}
 VAR_GLOBAL CONSTANT
 	eInternalLog			: E_LogLevel := E_LogLevel.eInfo;	(* min. log level for internal logging. *)
-	nBufferLen 				: UINT := 8192;		(* Length of per task log buffer in bytes *)
+	nBufferLen 				: UDINT := 1048576;	(* Length of per task log buffer in bytes, max 1MB *)
 	nMaxScopedContext		: UINT := 4;		(* Max. number of nested scope context. *)
 	eMaxLogLevel			: E_LogLevel := E_LogLevel.eWarn;
 END_VAR]]></Declaration>

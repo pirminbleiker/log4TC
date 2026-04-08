@@ -1,18 +1,6 @@
 //! Message template formatting and parsing
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use regex::Regex;
-
-fn placeholder_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\{([^}]+)\}").expect("regex should compile"))
-}
-
-fn numeric_placeholder_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\{(\d+)\}").expect("regex should compile"))
-}
 
 /// Message formatter for template-based message formatting
 pub struct MessageFormatter;
@@ -23,27 +11,8 @@ impl MessageFormatter {
             return template.to_string();
         }
 
-        let re = numeric_placeholder_regex();
-        let mut result = template.to_string();
-
-        // Collect all (placeholder, replacement) pairs first to avoid repeated String::replace
-        let mut replacements = Vec::with_capacity(arguments.len());
-        for cap in re.captures_iter(template) {
-            if let Ok(index) = cap[1].parse::<usize>() {
-                if let Some(value) = arguments.get(&index) {
-                    let placeholder = &cap[0];
-                    let value_str = Self::value_to_string(value);
-                    replacements.push((placeholder.to_string(), value_str));
-                }
-            }
-        }
-
-        // Apply replacements
-        for (placeholder, replacement) in replacements {
-            result = result.replace(&placeholder, &replacement);
-        }
-
-        result
+        let empty_context = HashMap::new();
+        Self::format_with_context(template, arguments, &empty_context)
     }
 
     /// Format a message with both positional and named arguments.
@@ -59,39 +28,81 @@ impl MessageFormatter {
             return template.to_string();
         }
 
-        let re = placeholder_regex();
-        let mut result = template.to_string();
-        let mut replacements = Vec::new();
-        let mut positional_index: usize = 0; // tracks which arg to use for named placeholders
+        // Single-pass: scan for `{...}` and build result directly.
+        // Track seen named placeholders so repeated occurrences reuse the same arg index.
+        let mut result = String::with_capacity(template.len() + 64);
+        let bytes = template.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+        let mut positional_index: usize = 0;
+        // Map named placeholder → assigned arg_index (small, stack-friendly)
+        let mut seen_names: [(&str, usize); 16] = [("", 0); 16];
+        let mut seen_count: usize = 0;
 
-        for cap in re.captures_iter(template) {
-            let key = &cap[1];
-            let placeholder = cap[0].to_string();
+        while i < len {
+            if bytes[i] == b'{' {
+                // Find closing brace
+                if let Some(end) = memchr_brace(bytes, i + 1) {
+                    let key = &template[i + 1..end];
+                    let mut replaced = false;
 
-            if let Ok(index) = key.parse::<usize>() {
-                // Numeric placeholder {0}, {1} → PLC args are 1-based
-                // {0} = first arg = index 1, {1} = second arg = index 2
-                let arg_index = index + 1;
-                if let Some(value) = arguments.get(&arg_index) {
-                    replacements.push((placeholder, Self::value_to_string(value)));
+                    if let Ok(index) = key.parse::<usize>() {
+                        // Numeric placeholder {0}, {1} → PLC args are 1-based
+                        let arg_index = index + 1;
+                        if let Some(value) = arguments.get(&arg_index) {
+                            write_value(&mut result, value);
+                            replaced = true;
+                        }
+                        // Only advance positional_index for first occurrence
+                        if !seen_names[..seen_count].iter().any(|(n, _)| *n == key) && seen_count < 16 {
+                            seen_names[seen_count] = (key, arg_index);
+                            seen_count += 1;
+                            positional_index += 1;
+                        }
+                    } else if !key.is_empty() {
+                        // Named placeholder — check if we've seen it before
+                        let arg_index = if let Some((_, idx)) = seen_names[..seen_count].iter().find(|(n, _)| *n == key) {
+                            *idx
+                        } else {
+                            // First occurrence: assign next positional arg
+                            let idx = positional_index + 1;
+                            if seen_count < 16 {
+                                seen_names[seen_count] = (key, idx);
+                                seen_count += 1;
+                            }
+                            positional_index += 1;
+                            idx
+                        };
+
+                        if let Some(value) = arguments.get(&arg_index) {
+                            write_value(&mut result, value);
+                            replaced = true;
+                        } else if let Some(value) = context.get(key) {
+                            write_value(&mut result, value);
+                            replaced = true;
+                        }
+                    }
+
+                    if replaced {
+                        i = end + 1;
+                    } else {
+                        // No replacement found, keep original placeholder
+                        result.push_str(&template[i..=end]);
+                        i = end + 1;
+                    }
+                } else {
+                    // No closing brace, copy literal
+                    result.push('{');
+                    i += 1;
                 }
-                positional_index += 1;
             } else {
-                // Named placeholder {time}, {name} → match by order of appearance
-                // PLC args are 1-based: first placeholder = arg[1]
-                let arg_index = positional_index + 1;
-                if let Some(value) = arguments.get(&arg_index) {
-                    replacements.push((placeholder, Self::value_to_string(value)));
-                } else if let Some(value) = context.get(key) {
-                    // Fallback: try context by name
-                    replacements.push((placeholder, Self::value_to_string(value)));
+                // Fast path: copy until next '{' or end
+                let start = i;
+                while i < len && bytes[i] != b'{' {
+                    i += 1;
                 }
-                positional_index += 1;
+                result.push_str(&template[start..i]);
             }
-        }
-
-        for (placeholder, replacement) in replacements {
-            result = result.replace(&placeholder, &replacement);
         }
 
         result
@@ -99,30 +110,79 @@ impl MessageFormatter {
 
     /// Extract placeholders from a template
     pub fn extract_placeholders(template: &str) -> Vec<String> {
-        let re = placeholder_regex();
-        re.captures_iter(template)
-            .map(|cap| cap[1].to_string())
-            .collect()
+        let bytes = template.as_bytes();
+        let len = bytes.len();
+        let mut placeholders = Vec::new();
+        let mut i = 0;
+
+        while i < len {
+            if bytes[i] == b'{' {
+                if let Some(end) = memchr_brace(bytes, i + 1) {
+                    let key = &template[i + 1..end];
+                    if !key.is_empty() {
+                        placeholders.push(key.to_string());
+                    }
+                    i = end + 1;
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        placeholders
     }
 
     /// Convert a JSON value to string representation
     fn value_to_string(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::Null => "null".to_string(),
-            serde_json::Value::Bool(b) => b.to_string(),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Array(arr) => {
-                let items: Vec<String> = arr.iter().map(Self::value_to_string).collect();
-                format!("[{}]", items.join(", "))
+        let mut s = String::with_capacity(32);
+        write_value(&mut s, value);
+        s
+    }
+}
+
+/// Find closing '}' starting from position
+#[inline]
+fn memchr_brace(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] == b'}' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Write JSON value directly to string buffer without intermediate allocation
+#[inline]
+fn write_value(buf: &mut String, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Null => buf.push_str("null"),
+        serde_json::Value::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
+        serde_json::Value::Number(n) => {
+            use std::fmt::Write;
+            let _ = write!(buf, "{}", n);
+        }
+        serde_json::Value::String(s) => buf.push_str(s),
+        serde_json::Value::Array(arr) => {
+            buf.push('[');
+            for (i, v) in arr.iter().enumerate() {
+                if i > 0 { buf.push_str(", "); }
+                write_value(buf, v);
             }
-            serde_json::Value::Object(obj) => {
-                let items: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, Self::value_to_string(v)))
-                    .collect();
-                format!("{{{}}}", items.join(", "))
+            buf.push(']');
+        }
+        serde_json::Value::Object(obj) => {
+            buf.push('{');
+            for (i, (k, v)) in obj.iter().enumerate() {
+                if i > 0 { buf.push_str(", "); }
+                buf.push_str(k);
+                buf.push('=');
+                write_value(buf, v);
             }
+            buf.push('}');
         }
     }
 }
@@ -323,7 +383,6 @@ mod tests {
 
     #[test]
     fn test_format_context_overrides_positional() {
-        // When a named placeholder appears, it should use context
         let mut args = HashMap::new();
         args.insert(0, serde_json::json!("positional"));
 
@@ -344,7 +403,6 @@ mod tests {
         let mut args = HashMap::new();
         args.insert(0, serde_json::json!("value"));
 
-        // Test that special regex chars in placeholders don't break things
         let result = MessageFormatter::format("Placeholder: {0}", &args);
         assert_eq!(result, "Placeholder: value");
     }
@@ -371,15 +429,10 @@ mod tests {
 
     #[test]
     fn test_extract_placeholder_with_spaces() {
-        // Note: The current implementation doesn't support spaces in placeholders
-        // but we should test the behavior
         let template = "Test { 0 } here";
         let placeholders = MessageFormatter::extract_placeholders(template);
 
-        // The regex might or might not match " 0 " depending on implementation
-        // This test documents the current behavior
         if !placeholders.is_empty() {
-            // If it matches, it should capture the content with spaces
             assert!(placeholders[0].contains("0"));
         }
     }

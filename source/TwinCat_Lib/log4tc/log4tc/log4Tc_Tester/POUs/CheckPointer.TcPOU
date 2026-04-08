@@ -12,7 +12,7 @@ END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[IF ptToTest = 0 THEN
-	F_LogLA3(E_LogLevel.eFatal, 'CheckPointer', 'Check pointer exception: {iSize} {iGran} {bWrite}', iSize, iGran, bWrite);
+	F_Log(E_LogLevel.eFatal, 'Check pointer exception: {iSize} {iGran} {bWrite}').WithLogger('CheckPointer').WithAnyArg(iSize).WithAnyArg(iGran).WithAnyArg(bWrite).CreateLog();
 END_IF
 CheckPointer := ptToTest;
 ]]></ST>
